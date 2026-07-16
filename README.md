@@ -15,9 +15,8 @@ Every skill here is:
   test commands are discovered from the repo or injected as inputs, never
   hardcoded.
 - **Harness-agnostic** — plain Markdown plus portable shell (bash 3.2+). Works
-  from Claude Code, Cursor, Windsurf/Cascade, Codex-style agents, or a human
-  following the steps. (One deliberate exception: `claude-hibernate` is Claude
-  Code-specific by nature.)
+  from Claude Code, Cursor, Windsurf/Cascade, Goose, Codex-style agents, or a
+  human following the steps.
 - **Research-grounded** — the design decisions (durable ledgers, fresh-context
   review, verification-first reporting) trace to the agent-engineering
   literature; see the [implement-spec design rationale](skills/implement-spec/README.md)
@@ -25,12 +24,11 @@ Every skill here is:
 
 ## The skills
 
-| Skill | Harness | Purpose |
-|---|---|---|
-| [`implement-spec`](skills/implement-spec/SKILL.md) | Any | The full SDLC on a spec: branch → plan + test matrix → implement → self-review → spec gap analysis → live verification → PR + evidence report |
-| [`self-review`](skills/self-review/SKILL.md) | Any | Two-pass review of the current branch: mechanical verification, then an independence-preserving design critique |
-| [`agent-docs`](skills/agent-docs/SKILL.md) | Any | Create (`bootstrap`) or converge (`refresh`) an AGENTS.md-standard doc hierarchy |
-| [`claude-hibernate`](skills/claude-hibernate/SKILL.md) | Claude Code | `hibernate` running sessions to disk before shutdown; `wake` them after reboot |
+| Skill | Purpose |
+|---|---|
+| [`implement-spec`](skills/implement-spec/SKILL.md) | The full SDLC on a spec: branch → plan + test matrix → implement → self-review → spec gap analysis → live verification → PR + evidence report |
+| [`self-review`](skills/self-review/SKILL.md) | Two-pass review of the current branch: mechanical verification, then an independence-preserving design critique |
+| [`agent-docs`](skills/agent-docs/SKILL.md) | Create (`bootstrap`) or converge (`refresh`) an AGENTS.md-standard doc hierarchy |
 
 ### implement-spec
 
@@ -64,12 +62,10 @@ that classifies broken references as *went stale* vs *authoring error* using
 git history. Both modes share the
 [Doc Authoring Guidelines](skills/agent-docs/guidelines.md).
 
-### claude-hibernate
-
-OS-hibernation for Claude Code sessions: `hibernate` captures the
-currently-running session set to a snapshot file, `wake` reopens each one
-(iTerm2 pane grid, Terminal.app tabs, or printed commands) after reboot.
-Claude Code-specific, repo-agnostic; wake automation is macOS-only.
+See also [`claude-hibernate`](https://github.com/SteveVitali/claude-hibernate)
+— hibernate running Claude Code sessions before shutdown, wake them after
+reboot. It began here, but as a Claude Code-specific utility it lives in its
+own repo.
 
 ## Quick start
 
@@ -162,10 +158,8 @@ progressive-disclosure material referenced from its `SKILL.md`.
 
 ## Requirements
 
-- `git`, `bash` 3.2+ (macOS system bash works), standard Unix tools
-- `python3` for `claude-hibernate` and JSON handling in some helpers
-- macOS for `claude-hibernate`'s wake automation (iTerm2/Terminal via
-  `osascript`); everything else is OS-portable
+- `git`, `bash` 3.2+ (macOS system bash works), standard Unix tools —
+  OS-portable throughout
 
 ## License
 

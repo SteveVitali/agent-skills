@@ -1,7 +1,7 @@
 {
   "name": "agent-skills",
   "version": "0.1.0",
-  "description": "Reusable, research-grounded skills for AI coding agents: implement-spec, self-review, agent-docs, claude-hibernate",
+  "description": "Reusable, research-grounded skills for AI coding agents: implement-spec, self-review, agent-docs",
   "author": {
     "name": "Steve Vitali"
   },

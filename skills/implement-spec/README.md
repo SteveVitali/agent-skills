@@ -255,7 +255,7 @@ like it needs more instructions, what it usually needs is more *structure*.
 
 ## 6. Portability
 
-The workflow is harness-agnostic prose (Claude Code, Cascade/Windsurf, Cursor, Codex-style agents).
+The workflow is harness-agnostic prose (Claude Code, Cascade/Windsurf, Cursor, Goose, Codex-style agents).
 The repo-specific bindings are the adapter layer to re-point when porting:
 
 - **A changed-files → verification mapper** (a `detect-targets`/`verify` script or equivalent) — the
