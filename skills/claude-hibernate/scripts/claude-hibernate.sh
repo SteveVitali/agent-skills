@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-sessions.sh — snapshot & restore running Claude Code sessions
+# claude-hibernate.sh — hibernate & wake Claude Code sessions across reboots
 # ---------------------------------------------------------------------------
 # CLAUDE CODE SPECIFIC. This tool is tied to Claude Code (it reads
 # ~/.claude/projects and invokes `claude --resume`) but is otherwise
@@ -7,9 +7,11 @@
 #
 # WHY
 # Claude Code does not record which sessions are "currently running", and a
-# machine shutdown kills every session process. This tool lets you capture the
-# set of running sessions to a snapshot file *before* shutting down, then
-# restore them (reopen a terminal tab per session, resuming each) after reboot.
+# machine shutdown kills every session process. Like OS hibernation — write
+# state to disk before power-off, restore it at boot — this tool captures the
+# set of running sessions to a snapshot file *before* shutdown (`hibernate`),
+# then reopens a terminal pane per session, resuming each, after reboot
+# (`wake`).
 #
 # HOW RUNNING SESSIONS ARE DETECTED
 #   1. live `claude` processes            (pgrep -x claude)
@@ -29,28 +31,34 @@
 # as internal and subject to change on any release, so all parsing here
 # degrades gracefully (missing/unparseable fields become empty strings).
 #
-# SUBCOMMANDS
-#   snapshot [--all]      Capture running sessions to the snapshot file.
-#                         Default: sessions in the current repo's worktrees.
-#                         --all: every running Claude session on the machine.
-#   restore  [--dry-run] [--fork]
-#                         Reopen + resume every session in the snapshot file.
-#                         Uses iTerm2 if present, else Terminal.app.
-#                         --dry-run: just print the commands.
-#                         --fork: resume with --fork-session (new session ids;
-#                         safe when the originals may still be running).
-#   list     [--repo|--here|--all]   Live table (read-only), no snapshot.
-#   print    [--repo|--here|--all]   Live `cd ... && claude --resume ...` lines.
+# MODES
+#   hibernate [--repo|--here|--all] [--dry-run]
+#       Capture running sessions to the snapshot file (the "hibernation
+#       image"). Default scope: sessions in the current repo's worktrees;
+#       --all: every running Claude session on the machine; --here: $PWD only.
+#       --dry-run: print a table of what would be captured, write nothing.
+#   wake [--dry-run] [--fork]
+#       Reopen + resume every session in the snapshot file. Uses iTerm2 if
+#       present, else Terminal.app.
+#       --dry-run: just print the resume commands.
+#       --fork: resume with --fork-session (new session ids; safe when the
+#       originals may still be running).
+#   wake --live [--repo|--here|--all] (--dry-run | --fork)
+#       Source currently-RUNNING sessions instead of the snapshot file — for
+#       printing paste-able resume commands (--dry-run) or opening forked
+#       duplicates (--fork). Refuses to run plain: that would attach a second
+#       process to a session id that is still live, and both processes would
+#       write the same transcript.
 #
 # SNAPSHOT FILE
 #   Canonical location:
-#     ${XDG_STATE_HOME:-$HOME/.local/state}/claude-sessions-snapshot.json
+#     ${XDG_STATE_HOME:-$HOME/.local/state}/claude-hibernate.json
 #   Machine-level state (one snapshot covers all repos/worktrees).
-#   Override with CLAUDE_SESSIONS_SNAPSHOT.
+#   Override with CLAUDE_HIBERNATE_FILE.
 #
 # ENV
-#   CLAUDE_CONFIG_DIR            Override ~/.claude.
-#   CLAUDE_SESSIONS_SNAPSHOT     Override the snapshot file path.
+#   CLAUDE_CONFIG_DIR       Override ~/.claude.
+#   CLAUDE_HIBERNATE_FILE   Override the snapshot file path.
 #
 # Compatible with macOS system bash 3.2.
 # ---------------------------------------------------------------------------
@@ -60,18 +68,20 @@ CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 PROJECTS_DIR="$CLAUDE_DIR/projects"
 
 CMD=""
-FILTER_MODE="repo"   # repo | here | all   (default repo for snapshot/list/print)
+FILTER_MODE="repo"   # repo | here | all   (scope for hibernate and wake --live)
 DRY_RUN=0
 FORK=0
+LIVE=0
 
 for arg in "$@"; do
   case "$arg" in
-    snapshot|restore|list|print) CMD="$arg" ;;
+    hibernate|wake) CMD="$arg" ;;
     --all)     FILTER_MODE="all" ;;
     --repo)    FILTER_MODE="repo" ;;
     --here)    FILTER_MODE="here" ;;
     --dry-run) DRY_RUN=1 ;;
     --fork)    FORK=1 ;;
+    --live)    LIVE=1 ;;
     -h|--help)
       sed -n '2,/^set -u/p' "$0" | sed 's/^# \{0,1\}//; /^set -u/d'
       exit 0 ;;
@@ -79,14 +89,14 @@ for arg in "$@"; do
   esac
 done
 
-[ -z "$CMD" ] && { echo "Usage: claude-sessions.sh {snapshot|restore|list|print} [--repo|--here|--all] [--dry-run] [--fork]" >&2; exit 2; }
+[ -z "$CMD" ] && { echo "Usage: claude-hibernate.sh {hibernate|wake} [--repo|--here|--all] [--dry-run] [--fork] [--live]" >&2; exit 2; }
 
 # --- Resolve the canonical snapshot file path -------------------------------
 resolve_snapshot_path() {
-  if [ -n "${CLAUDE_SESSIONS_SNAPSHOT:-}" ]; then
-    printf '%s\n' "$CLAUDE_SESSIONS_SNAPSHOT"; return
+  if [ -n "${CLAUDE_HIBERNATE_FILE:-}" ]; then
+    printf '%s\n' "$CLAUDE_HIBERNATE_FILE"; return
   fi
-  printf '%s/claude-sessions-snapshot.json\n' "${XDG_STATE_HOME:-$HOME/.local/state}"
+  printf '%s/claude-hibernate.json\n' "${XDG_STATE_HOME:-$HOME/.local/state}"
 }
 SNAPSHOT_FILE=$(resolve_snapshot_path)
 
@@ -232,25 +242,30 @@ end tell
 OSA
 }
 
+# emit_cmd <cwd> <sid> — NUL-delimited resume command on stdout, honoring $FORK
+emit_cmd() {
+  if [ "$FORK" = "1" ]; then
+    printf 'cd %s && claude --resume %s --fork-session\0' "$(printf '%q' "$1")" "$2"
+  else
+    printf 'cd %s && claude --resume %s\0' "$(printf '%q' "$1")" "$2"
+  fi
+}
+
 case "$CMD" in
-  list)
-    printf '%-7s  %-34s  %-36s  %-28s  %s\n' "PID" "CWD" "SESSION ID" "BRANCH" "SUMMARY"
-    printf '%-7s  %-34s  %-36s  %-28s  %s\n' \
-      "-------" "----------------------------------" \
-      "------------------------------------" "----------------------------" "-------"
-    collect_running | while IFS='|' read -r pid cwd sid branch summary; do
-      short_cwd=$(printf '%s' "$cwd" | sed "s#^$HOME#~#")
-      printf '%-7s  %-34s  %-36s  %-28s  %s\n' "$pid" "$short_cwd" "$sid" "$branch" "$summary"
-    done
-    ;;
+  hibernate)
+    if [ "$DRY_RUN" = "1" ]; then
+      # Preview: table of what would be captured. Writes nothing.
+      printf '%-7s  %-34s  %-36s  %-28s  %s\n' "PID" "CWD" "SESSION ID" "BRANCH" "SUMMARY"
+      printf '%-7s  %-34s  %-36s  %-28s  %s\n' \
+        "-------" "----------------------------------" \
+        "------------------------------------" "----------------------------" "-------"
+      collect_running | while IFS='|' read -r pid cwd sid branch summary; do
+        short_cwd=$(printf '%s' "$cwd" | sed "s#^$HOME#~#")
+        printf '%-7s  %-34s  %-36s  %-28s  %s\n' "$pid" "$short_cwd" "$sid" "$branch" "$summary"
+      done
+      exit 0
+    fi
 
-  print)
-    collect_running | while IFS='|' read -r pid cwd sid branch summary; do
-      printf 'cd %s && claude --resume %s\n' "$(printf '%q' "$cwd")" "$sid"
-    done
-    ;;
-
-  snapshot)
     rows=$(collect_running)
     if [ -z "$rows" ]; then
       echo "No running sessions matched (scope=$FILTER_MODE). Snapshot not written."
@@ -286,28 +301,36 @@ doc = {
 print(json.dumps(doc, indent=2))
 ' > "$SNAPSHOT_FILE"
     n=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["count"])' "$SNAPSHOT_FILE" 2>/dev/null)
-    echo "Wrote $n session(s) (scope=$FILTER_MODE) to $SNAPSHOT_FILE"
+    echo "Hibernated $n session(s) (scope=$FILTER_MODE) to $SNAPSHOT_FILE"
     [ -f "$SNAPSHOT_FILE.prev" ] && echo "Previous snapshot kept at $SNAPSHOT_FILE.prev"
     ;;
 
-  restore)
-    if [ ! -f "$SNAPSHOT_FILE" ]; then
-      echo "No snapshot file at $SNAPSHOT_FILE. Run 'snapshot' first." >&2
-      exit 1
-    fi
-    launcher=$(detect_launcher)
-    if [ "$DRY_RUN" = "0" ] && [ "$launcher" = "none" ]; then
-      echo "No supported terminal (iTerm2/Terminal.app) found. Showing commands instead:" >&2
-      DRY_RUN=1
-    fi
-
-    # Build the resume commands from the snapshot, skipping sessions whose cwd
-    # is gone. Python emits cwd<TAB>sid pairs (one per line); bash assembles the
-    # shell command with proper quoting via printf %q and writes NUL-delimited
-    # commands to a temp file (bash variables cannot hold NUL bytes).
-    CMDFILE=$(mktemp "${TMPDIR:-/tmp}/cc_restore.XXXXXX")
+  wake)
+    CMDFILE=$(mktemp "${TMPDIR:-/tmp}/cc_wake.XXXXXX")
     trap 'rm -f "$CMDFILE"' EXIT
-    python3 -c '
+
+    if [ "$LIVE" = "1" ]; then
+      # Source currently-running sessions instead of the snapshot file.
+      if [ "$DRY_RUN" = "0" ] && [ "$FORK" = "0" ]; then
+        echo "wake --live needs --dry-run (print resume commands) or --fork (open" >&2
+        echo "forked duplicates): plain wake would attach a second process to a" >&2
+        echo "session id that is still live." >&2
+        exit 2
+      fi
+      collect_running | while IFS='|' read -r pid cwd sid branch summary; do
+        emit_cmd "$cwd" "$sid"
+      done > "$CMDFILE"
+      [ -s "$CMDFILE" ] || { echo "No running sessions matched (scope=$FILTER_MODE)."; exit 0; }
+    else
+      if [ ! -f "$SNAPSHOT_FILE" ]; then
+        echo "No snapshot file at $SNAPSHOT_FILE. Run 'hibernate' first." >&2
+        exit 1
+      fi
+      # Build the resume commands from the snapshot, skipping sessions whose cwd
+      # is gone. Python emits cwd<TAB>sid pairs (one per line); bash assembles
+      # the shell command with proper quoting via printf %q and writes
+      # NUL-delimited commands to a temp file (bash variables cannot hold NULs).
+      python3 -c '
 import json, sys, os
 doc = json.load(open(sys.argv[1]))
 for s in doc.get("sessions", []):
@@ -319,16 +342,9 @@ for s in doc.get("sessions", []):
         continue
     sys.stdout.write("%s\t%s\n" % (cwd, sid))
 ' "$SNAPSHOT_FILE" | while IFS="$(printf '\t')" read -r cwd sid; do
-      if [ "$FORK" = "1" ]; then
-        printf 'cd %s && claude --resume %s --fork-session\0' "$(printf '%q' "$cwd")" "$sid"
-      else
-        printf 'cd %s && claude --resume %s\0' "$(printf '%q' "$cwd")" "$sid"
-      fi
-    done > "$CMDFILE"
-
-    if [ ! -s "$CMDFILE" ]; then
-      echo "No restorable sessions in snapshot (all cwds gone?)."
-      exit 0
+        emit_cmd "$cwd" "$sid"
+      done > "$CMDFILE"
+      [ -s "$CMDFILE" ] || { echo "No wakeable sessions in snapshot (all cwds gone?)."; exit 0; }
     fi
 
     if [ "$DRY_RUN" = "1" ]; then
@@ -336,13 +352,20 @@ for s in doc.get("sessions", []):
       exit 0
     fi
 
+    launcher=$(detect_launcher)
+    if [ "$launcher" = "none" ]; then
+      echo "No supported terminal (iTerm2/Terminal.app) found. Showing commands instead:" >&2
+      tr '\0' '\n' < "$CMDFILE"
+      exit 0
+    fi
+
     case "$launcher" in
       iterm2)
-        echo "Restoring sessions as a 2-column pane grid in a new iTerm2 window..."
+        echo "Waking sessions as a 2-column pane grid in a new iTerm2 window..."
         open_iterm_grid "$CMDFILE"
         ;;
       terminal)
-        echo "iTerm2 not found; restoring sessions as Terminal.app tabs..."
+        echo "iTerm2 not found; waking sessions as Terminal.app tabs..."
         while IFS= read -r -d '' cmd; do
           open_terminal_tab "$cmd"
         done < "$CMDFILE"
