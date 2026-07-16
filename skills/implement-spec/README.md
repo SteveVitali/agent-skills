@@ -1,6 +1,6 @@
-# execute-task — Spec to Provably-Complete PR, Autonomously
+# implement-spec — Spec to Provably-Complete PR, Autonomously
 
-`execute-task.md` is a workflow/skill that packs the full software development lifecycle — branch,
+`implement-spec.md` is a workflow/skill that packs the full software development lifecycle — branch,
 plan, implement, test, review, verify, ship — into a single autonomous agent run whose input is an
 **authoritative written spec** and whose output is a **pull request plus an evidence report** proving,
 acceptance criterion by acceptance criterion, that the implementation matches the spec.
@@ -34,7 +34,7 @@ are *structural* failures of the run itself:
 3. **Self-evaluation bias.** The agent that wrote the code is a systematically unreliable reviewer of
    it. This is the most quantified of the three failures (see §2.1–2.2).
 
-`execute-task` is organized so that every phase either produces external evidence, persists state to
+`implement-spec` is organized so that every phase either produces external evidence, persists state to
 disk, or restores judgment independence. Everything else — the actual engineering — is left to the
 model's own competence.
 
@@ -56,7 +56,7 @@ Huang et al. (*Large Language Models Cannot Self-Correct Reasoning Yet*, ICLR 20
 degenerate case: prompted intrinsic self-correction without external signals often makes answers
 *worse*.
 
-**Design consequence:** every review loop in `execute-task` is anchored to an external signal or a
+**Design consequence:** every review loop in `implement-spec` is anchored to an external signal or a
 citation obligation. Phase 3 loops against `verify.sh` (build/test/lint). Phase 4's gap table makes
 "met" a *citation task*, not a claim: a requirement is met only if the agent can cite the file:line,
 symbol, or test that proves it — deliberately moving the check into the verification-easier-than-
@@ -78,7 +78,7 @@ because generator self-evaluation kept passing applications that "looked impress
 real bugs when you actually tried to use them." The evaluator ran with fresh context and drove the
 app through Playwright like a user ([Harness design for long-running application development][harness-design]).
 
-**Design consequence:** `execute-task` requires independence at both review points. Phase 3 Pass 2
+**Design consequence:** `implement-spec` requires independence at both review points. Phase 3 Pass 2
 (design critique) and the Phase 4 gap walk should run in a **fresh subagent context given only the
 spec, the diff, and the ledger** — not the implementation history — wherever the harness supports
 subagents. Where it doesn't, the fallback discipline is explicit: every judgment must be argued from
@@ -101,7 +101,7 @@ Two details are worth keeping:
 - the "getting up to speed" ritual — read progress file, read feature list, check git log, smoke-test
   the app — is what made sessions resumable and prevented agents from building on a broken base.
 
-**Design consequence:** `execute-task` Phase 0.4 creates a **run ledger** on disk (in a canonical,
+**Design consequence:** `implement-spec` Phase 0.4 creates a **run ledger** on disk (in a canonical,
 gitignored scratch location) holding the spec's requirement + acceptance-criteria checklist, the test
 matrix, the gap table, the shared-store fixtures list, and the evidence log. Every phase transition
 updates it. The ledger is simultaneously the compaction-proof checklist, the crash/reset resume
@@ -117,7 +117,7 @@ tests, even `curl` a dev server — and still ship features that don't work end-
 "dramatically improved performance" was explicitly requiring human-like driving of the real system
 (browser automation, real interactions) before marking anything complete ([harness][harness]).
 
-`execute-task` Phase 5.3 generalizes that finding beyond web apps: stand up the real local
+`implement-spec` Phase 5.3 generalizes that finding beyond web apps: stand up the real local
 environment, derive a live test matrix from the spec's acceptance criteria (including negative and
 back-compat cases, not just happy paths), drive each scenario agentically, and verify against
 multiple independent signals (responses, state reads, server logs, rendered UI).
@@ -149,16 +149,16 @@ Anthropic's skill-authoring guidance ([Skill authoring best practices][skill-bp]
 for how a document like this should be written:
 
 - **"Concise is key" / "assume the model is smart":** only add context the model doesn't have.
-  `execute-task` spends its tokens on repo bindings, failure modes, and state/independence rules —
-  not on explaining what a PR is or how to write good Scala (that lives in the repo's AGENTS.md
-  hierarchy, loaded just-in-time in Phase 0.3, which is itself the progressive-disclosure pattern the
-  guidance recommends).
+  `implement-spec` spends its tokens on repo bindings, failure modes, and state/independence rules —
+  not on explaining what a PR is or how to write good code in the repo's language (that lives in the
+  repo's AGENTS.md hierarchy, loaded just-in-time in Phase 0.3, which is itself the
+  progressive-disclosure pattern the guidance recommends).
 - **Degrees of freedom must match fragility:** exact commands for fragile, must-be-exact operations;
   heuristics for judgment work. See §4.
 - **Feedback loops ("run validator → fix → repeat") greatly improve output quality** — the skeleton
   of Phases 3–5 — and **bounded iterations** (max 3 per loop here) prevent the unproductive
   self-refinement spirals that the self-correction literature predicts for intrinsic-feedback loops.
-- **Avoid offering too many options:** one default path, few conditionals. `execute-task`'s
+- **Avoid offering too many options:** one default path, few conditionals. `implement-spec`'s
   "deliberate omissions" section (no merge-main, no CI polling, no Slack) is this principle applied
   to scope: those concerns compose on top; they are not on the critical path.
 
@@ -172,7 +172,7 @@ as quality gates ([Spec Kit][speckit]). AWS Kiro's spec loop (`requirements.md` 
 discipline this skill adopts in ledger form: don't hand-edit the task state mid-grind; keep one
 source of truth ([Kiro docs][kiro]).
 
-`execute-task` is the **back half of SDD**: it assumes the spec already exists and is authoritative
+`implement-spec` is the **back half of SDD**: it assumes the spec already exists and is authoritative
 (the front half — clarify, plan, checklist the spec itself — happens before this skill is invoked).
 Its Phase 4 is Spec Kit's `analyze` + `converge` made *mandatory and evidence-bearing* rather than
 opt-in.
@@ -181,13 +181,23 @@ The published criticisms of SDD tooling informed the design as much as the featu
 consistently report **process weight** — "a sea of markdown documents, long agent run-times …
 reviewing markdown or waiting for the agent to churn out more markdown" (Scott Logic, on Spec Kit) —
 and **nondeterminism**: prose specs are interpreted, not executed, so nothing proves the code
-conforms. `execute-task` answers the first by generating exactly one process artifact (the ledger,
+conforms. `implement-spec` answers the first by generating exactly one process artifact (the ledger,
 which triples as checklist, resume point, and report) and scaling rigor to the change ("skip only for
 genuinely trivial specs"; Phase 5 levels apply only where the change has a surface). It answers the
 second with the evidence obligation: conformance is never asserted, it is *cited* — and the citations
 ship in the PR.
 
-## 3. Anatomy: phase → mechanism → grounding
+## 3. Configuration: opt-out toggles
+
+Every rigor phase is independently disableable (`ledger`, `self_review`, `gap_analysis`, `tests`,
+`live_verification`, `evidence_report` — all default on), because proportionality is itself a
+best practice: Anthropic's authoring guidance warns against one-size-fits-all process weight, and the
+SDD critiques (§2.7) show what happens when full ceremony is applied to small changes. Two invariants
+survive every configuration: the **green gate** (existing builds/tests must pass before a
+ready-for-review PR) and the **no-false-claims rule** (an unrun check is never reported as passed).
+The toggles remove work, never honesty.
+
+## 3b. Anatomy: phase → mechanism → grounding
 
 | Phase | Mechanism | Grounding |
 |---|---|---|
@@ -206,7 +216,7 @@ ship in the PR.
 ## 4. Degrees-of-freedom calibration
 
 Anthropic's authoring guidance frames specificity as a function of *fragility*, not model capability
-("narrow bridge with cliffs" vs "open field"). `execute-task` applies that split deliberately:
+("narrow bridge with cliffs" vs "open field"). `implement-spec` applies that split deliberately:
 
 - **Low freedom (exact commands):** branch/worktree setup, `verify.sh` invocation, staging and
   commit mechanics, PR creation. These are fragile, consistency-critical, and encode repo policy
@@ -248,14 +258,15 @@ like it needs more instructions, what it usually needs is more *structure*.
 The workflow is harness-agnostic prose (Claude Code, Cascade/Windsurf, Cursor, Codex-style agents).
 The repo-specific bindings are the adapter layer to re-point when porting:
 
-- `.dev/evaluators/detect-targets.sh` + `verify.sh` — changed-files → build/test target mapping and
-  the mechanical feedback loop. Any equivalent "map my diff to verification commands" tool works.
-- `fsq-places/crawl/bin/agent-scratch-dir` — the canonical, gitignored, cross-worktree scratch
-  location for the run ledger. Any stable non-committed path works; keep it *outside* per-worktree
-  state if multiple checkouts share a machine.
+- **A changed-files → verification mapper** (a `detect-targets`/`verify` script or equivalent) — the
+  mechanical feedback loop. Any "map my diff to build/test/lint commands" tool works; absent one, the
+  skill falls back to deriving commands from the repo's docs and build system.
+- **A stable, gitignored scratch location** for the run ledger (`$AGENT_SCRATCH_DIR` or the default
+  `.agents/scratch/` under the main worktree). Keep it *outside* per-worktree state if multiple
+  checkouts share a machine.
 - The `AGENTS.md` / `agent_docs/` hierarchy — the just-in-time knowledge layer Phase 0.3 loads.
-- `.dev/workflows/self-review.md` — the two-pass review procedure Phase 3 invokes.
-- The `crawl` local-dev CLI — the Phase 5.3 environment launcher; substitute the target repo's own.
+- The sibling `self-review` skill — the two-pass review procedure Phase 3 invokes.
+- **The repo's local-dev launcher** — the Phase 5.3 environment; discovered from the repo's docs.
 
 ## References
 

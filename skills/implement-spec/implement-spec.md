@@ -1,5 +1,5 @@
 ---
-id: execute-task
+id: implement-spec
 description: "Spec-driven, autonomous end-to-end: branch → plan + test matrix → implement (tests alongside) → self-review → gap-analysis vs spec → close gaps → rigorous downstream verification → PR + evidence report"
 inputs:
   - name: spec
@@ -16,22 +16,58 @@ inputs:
     description: "If given, run in this git worktree path instead of the current checkout (isolation from other concurrent agents). The workflow assumes the worktree + branch already exist unless told to create them."
   - name: autonomous
     required: false
-    description: "Default true. When true, run to completion without check-ins — surface only at the end with the PR link + evidence report. When false, pause for plan confirmation on large/cross-cutting tasks (execute-ticket behavior)."
+    description: "Default true. When true, run to completion without check-ins — surface only at the end with the PR link + evidence report. When false, pause for plan confirmation on large/cross-cutting tasks."
+  - name: ledger
+    required: false
+    description: "Default true. Maintain the durable run ledger (Phase 0.4). Disabling removes crash/compaction resumability — only for short single-sitting tasks."
+  - name: self_review
+    required: false
+    description: "Default true. Run Phase 3 two-pass self-review. When false, the Phase 6.0 green gate still applies."
+  - name: gap_analysis
+    required: false
+    description: "Default true. Run Phase 4 spec gap analysis. When false, acceptance criteria are only checked implicitly by Phase 5 verification."
+  - name: tests
+    required: false
+    description: "Default true. Derive the AC test matrix (1.4), write tests alongside implementation (Phase 2), run unit/integration suites (5.1–5.2). When false, existing suites must still pass."
+  - name: live_verification
+    required: false
+    description: "Default true. Run Phase 5.3 interactive/agentic live verification where the change has a runtime surface."
+  - name: evidence_report
+    required: false
+    description: "Default true. Produce the Phase 6.4 evidence report + PR AC/evidence table. When false, finish with a standard PR summary."
 ---
 
-# Execute Task
+# Implement Spec
 
 Turn an **authoritative spec** into a reviewable, spec-complete, rigorously-verified PR — autonomously.
 
-This is the spec-driven sibling of `execute-ticket`: same context-loading, implementation discipline,
-self-review-before-commit, and clean PR — minus the merge-main / CI-polling / Slack steps — plus the two phases
-a spec-driven autonomous run needs: **gap analysis vs the spec** (Phase 4) and **rigorous downstream
-verification** (Phase 5). The output is a PR **plus an evidence report** that proves completeness/correctness
-against the spec — not just "it builds."
+This extends a conventional implement-and-PR workflow (context-loading, implementation discipline,
+self-review-before-commit, clean PR) with the two phases a spec-driven autonomous run needs: **gap analysis vs
+the spec** (Phase 4) and **rigorous downstream verification** (Phase 5). The output is a PR **plus an evidence
+report** that proves completeness/correctness against the spec — not just "it builds."
 
-> **When to use `execute-task` vs `execute-ticket`:** use `execute-task` when there is an authoritative written
-> spec, when the run must be fully autonomous to completion, and when "done" means *provably matches the spec*
-> (not just "compiles + self-reviewed"). Use `execute-ticket` for a rough idea that needs a quick clean PR.
+> **When to use this skill:** when there is an authoritative written spec, when the run must be fully
+> autonomous to completion, and when "done" means *provably matches the spec* (not just "compiles +
+> self-reviewed"). For a rough idea that just needs a quick clean PR, use a lighter ticket workflow instead.
+
+## Configuration
+
+Every rigor phase can be disabled independently (all default **on**). Opting out trades assurance for speed —
+the table states what you lose. No toggle disables the Phase 6.0 green gate: existing builds and affected test
+suites must pass regardless.
+
+| Input | Disables | You lose |
+|---|---|---|
+| `ledger=false` | Phase 0.4 run ledger (keep that state in-context instead) | Crash/compaction resumability; durable gap-table evidence |
+| `self_review=false` | Phase 3 | Design critique + mechanical checklist pass before the spec diff |
+| `gap_analysis=false` | Phase 4 | The explicit spec-completeness proof; ACs checked only via Phase 5 |
+| `tests=false` | 1.4 test matrix, new tests in Phase 2, 5.1–5.2 new-test runs | Regression protection for the new logic |
+| `live_verification=false` | Phase 5.3 | End-to-end proof on the running system |
+| `evidence_report=false` | Phase 6.4 + the PR AC/evidence table | The per-AC evidence trail; PR gets a standard summary |
+
+Sensible presets: **full** (all on — the default); **fast-follow** (`gap_analysis=false live_verification=false`)
+for small mechanical changes against a precise spec; **prototype** (`tests=false evidence_report=false`) for
+explicitly throwaway spikes. When in doubt, leave everything on.
 
 ---
 
@@ -46,8 +82,7 @@ command leaks into the wrong checkout (critical when other agents share the mach
 export TASK_ROOT="${worktree:-$(git rev-parse --show-toplevel)}"
 # Run EVERY subsequent command with cwd = $TASK_ROOT: `cd` once in a persistent shell, or set the command's
 # working directory in harnesses that forbid `cd`.
-# For this repo's dev CLI, also pin the worktree so `crawl` targets the right slot/ports:
-export CRAWL_DEV_WORKTREE="$TASK_ROOT"
+# If the repo's local-dev tooling needs a worktree/instance pin (ports, slots), export it here too.
 git rev-parse --show-toplevel   # confirm you are where you think you are
 ```
 
@@ -83,26 +118,27 @@ git rev-parse HEAD          # base tip you branched from
    - **Requirements** — every "shall/add/wire/implement" item, by section.
    - **Acceptance criteria** — the spec's explicit AC list (if present) plus any implied "must hold" invariants.
    This becomes the ledger's working checklist (0.4) for the whole run.
-2. **Read the AGENTS.md hierarchy** (repo root → subproject → package) for conventions and "ask-first"
-   boundaries, exactly as `execute-ticket` Phase 0.3 does. For this monorepo: `AGENTS.md`,
-   `fsq-places/crawl/AGENTS.md`, and the relevant `fsq-places/crawl/agent_docs/*` (e.g. `scala_style.md`,
-   `common_pitfalls.md`, `mongo_models.md` for models, `frontend_patterns.md` for UI, `local_dev.md` for the
-   `crawl` CLI, `build_and_test.md` for targets).
+2. **Read the agent-docs hierarchy** (repo root → subproject → package) for conventions and "ask-first"
+   boundaries: the root `AGENTS.md` (or `CLAUDE.md`), each affected subproject's `AGENTS.md`, and any
+   `agent_docs/` reference library the repo maintains (style guides, common pitfalls, data-model docs,
+   local-dev and build/test guides).
 3. **Read the spec's integration anchors.** A good spec names file:line anchors — open each so you implement
    against the real current code, not an assumed shape. Anchors drift: if the referenced code moved or changed
    since the spec was written, record the drift in the run ledger (0.4) and adapt; if the drift invalidates the
    spec's design, that is a hard blocker per the autonomy contract — surface it rather than silently improvising
    a new design.
 
-### 0.4 — Create the run ledger (durable state)
+### 0.4 — Create the run ledger (durable state) *(skip if `ledger=false`)*
 
 Context is lossy over a run this long — compaction and session resets degrade exactly the fine-grained early
 details Phase 4 depends on. Everything the later phases need must live on disk, not in the context window.
-Create one ledger file in the canonical agent scratch dir (see AGENTS.md — never a worktree-local path):
+Create one ledger file in a stable, **gitignored** scratch location — honor the repo's canonical agent scratch
+dir if it defines one, else default to a shared dir under the main worktree:
 
 ```bash
-SCRATCH="$(fsq-places/crawl/bin/agent-scratch-dir)"
-LEDGER="$SCRATCH/execute-task_${branch_name//\//-}_$(date +%Y%m%d).md"
+SCRATCH="${AGENT_SCRATCH_DIR:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.agents/scratch}"
+mkdir -p "$SCRATCH"   # must be gitignored; never commit ledger files
+LEDGER="$SCRATCH/implement-spec_${branch_name//\//-}_$(date +%Y%m%d).md"
 ```
 
 Seed it with: spec path, base commit, branch, and the Phase 0.3 requirements + acceptance-criteria checklist;
@@ -120,14 +156,13 @@ Produce a brief implementation plan (skip only for genuinely trivial specs) and 
 
 ### 1.1 — Scope + targets
 - Which files change, which packages are affected, which "ask-first" boundaries are touched
-  (e.g. `CrawlModels.scala`, new Maven deps, Kafka topics)?
-- Map verification targets upfront:
-  ```bash
-  echo "<files you plan to change>" | .dev/evaluators/detect-targets.sh
-  ```
-- **Coverage guard:** the evaluators currently map only `fsq-places/crawl` + `fsq-places/common`. If your files
-  fall outside that, a green `verify.sh` proves nothing — derive the real build/test commands from the affected
-  subproject's AGENTS.md, use them everywhere this workflow says "verify," and say so in the final report.
+  (e.g. shared data models/schemas, new third-party dependencies, public API contracts)?
+- Map verification targets upfront: if the repo provides a changed-files → build/test target mapper (a
+  `detect-targets` script or equivalent), run it on your planned file list; otherwise derive the exact
+  build/test/lint commands for each affected package from its agent docs or build system.
+- **Coverage guard:** if the repo's verification tooling does not cover an affected area, a green run of it
+  proves nothing — derive the real build/test commands from that area's docs/build system, use them everywhere
+  this workflow says "verify," and say so in the final report.
 
 ### 1.2 — Baseline health check
 Before changing anything, confirm the baseline is green: the mapped targets build/pass at the base commit, and —
@@ -140,7 +175,7 @@ unambiguous.
   and any design decisions/tradeoffs.
 - If the spec suggests a PR shape / logical grouping, adopt it as your implementation order.
 
-### 1.4 — Test matrix from the acceptance criteria
+### 1.4 — Test matrix from the acceptance criteria *(skip if `tests=false`)*
 Translate **every** acceptance criterion into concrete planned tests *before implementing*: unit tests for pure
 logic, integration tests for the seams, live scenarios for runtime behavior (these become the 5.3 matrix). Write
 the matrix into the ledger. Deriving tests from the spec now — rather than from the finished code later — keeps
@@ -155,7 +190,7 @@ them asserting *what the spec demands* instead of *what the implementation happe
 
 ## Phase 2: Implement
 
-Adopt the implementation persona (same as `execute-ticket` Phase 2):
+Adopt the implementation persona:
 
 > You are a Staff Engineer who writes production-quality code — code your most critical colleague would approve
 > on first review. Before writing, think about the contract (in/out/failure modes), what adjacent code looks
@@ -168,7 +203,7 @@ Implement the spec in the planned order, **writing each logical group's tests (p
 implementing that group** — not as a Phase-5 afterthought. Keep the build green as you go — after each logical
 group, run that subproject's build/test/lint commands (the ones its AGENTS.md / `agent_docs` prescribe) rather than accumulating
 a large unverified diff. **Do not commit yet** — verification and review happen before the first commit (the
-`execute-ticket` "one clean commit" principle), except that a long autonomous run MAY checkpoint-commit between
+one-clean-commit principle), except that a long autonomous run MAY checkpoint-commit between
 logical groups if that de-risks the run; if so, keep messages descriptive and squash-or-keep at your discretion.
 
 Honor the conventions established by the AGENTS.md hierarchy and `agent_docs` you loaded in Phase 0.3, and by the
@@ -178,10 +213,11 @@ is documented (style guide, common-pitfalls doc), follow it exactly.
 
 ---
 
-## Phase 3: Self-review (design + mechanical)
+## Phase 3: Self-review (design + mechanical) *(skip if `self_review=false`)*
 
-**Invoke `.dev/workflows/self-review.md` and follow it completely.** Pass 1 (mechanical: `verify.sh` + the
-Scala/frontend checklists) and Pass 2 (Staff-Engineer design critique with full file reads). Fix everything it
+**Invoke the `self-review` skill (`skills/self-review/self-review.md`) and follow it completely.** Pass 1
+(mechanical: the repo's verification command + mechanical checklists) and Pass 2 (Staff-Engineer design
+critique with full file reads). Fix everything it
 surfaces and re-verify. Max 3 verify-fix-review iterations. If *design* concerns persist after 3, record them in
 the ledger for the final report and proceed; a *mechanical* failure (red build or failing tests) is different —
 it may never be carried forward and blocks the PR gate (6.0).
@@ -194,7 +230,7 @@ never from memory of writing it.
 
 ---
 
-## Phase 4: Gap analysis vs the spec
+## Phase 4: Gap analysis vs the spec *(skip if `gap_analysis=false`)*
 
 The core addition of this workflow. Self-review asked *"is this good code?"*; this phase asks *"does it fully
 satisfy what the spec demanded?"* — an orthogonal check. A change can be beautiful and still miss half the spec.
@@ -257,7 +293,7 @@ config, cross-module calls) — not just the units in isolation. Assert the spec
 (round-trips, state transitions, inclusion/exclusion behavior, toggles, back-compat when the new surface is
 empty). Use whatever driving mechanism fits the seam (in-process test, CLI invocation, HTTP request, etc.).
 
-### 5.3 — Interactive / agentic live verification (the heart of this phase — do this wherever the change has a runtime surface)
+### 5.3 — Interactive / agentic live verification *(skip if `live_verification=false`)* (the heart of this phase — do this wherever the change has a runtime surface)
 
 Goal: **prove to yourself, empirically, that the change behaves as the spec says** — the way a careful human
 would, by running the real thing and inspecting real signals. Not "a test passed" — *"I drove the live system
@@ -299,7 +335,7 @@ passed.**
 ## Phase 6: Finalize — commit, PR, evidence report
 
 ### 6.0 — Green gate
-If any code changed since the last clean `verify.sh` pass (Phase 4/5 fixes), re-run it now. **A red build or
+If any code changed since the last clean mechanical-verification pass (Phase 4/5 fixes), re-run it now. **A red build or
 failing test may never reach a ready-for-review PR.** If it can't be fixed within the bounded iterations, either
 stop and surface it as a hard blocker, or open the PR as `--draft` with the failure stated at the top of the
 body. Unresolved *design* notes may ship with the report; a red build may not.
@@ -307,8 +343,9 @@ body. Unresolved *design* notes may ship with the report; a red build may not.
 ### 6.1 — Commit (intentional staging)
 Review `git status` and stage **intentionally** — every staged file should correspond to the change (cross-check
 against the gap table's evidence column). Do not blanket `git add -A`: long runs produce stray one-off
-scripts/fixtures, and those belong in the canonical scratch dir, not the PR. Exclude agent-harness dirs
-(`.windsurf/`, `.claude/`, `.cursor/`, `.dev/`) **unless the spec's scope explicitly includes them**.
+scripts/fixtures, and those belong in the scratch dir, not the PR. Exclude agent-harness dirs
+(e.g. `.windsurf/`, `.claude/`, `.cursor/`, `.dev/`, `.agents/`) **unless the spec's scope explicitly includes
+them**.
 
 ```bash
 git status --short                       # review everything the run touched
@@ -333,7 +370,7 @@ PR body: **Summary** (what + why) · **What changed** (files/areas) · **Design 
 → evidence table** (from the ledger), so the PR is self-reviewing and the proof survives outside the chat
 transcript.
 
-### 6.4 — Evidence report (the proof — this is the deliverable)
+### 6.4 — Evidence report (the proof — this is the deliverable) *(if `evidence_report=false`: replace with a concise standard summary)*
 The ledger is the source of truth — derive the report from it, don't reconstruct from memory. Return to the
 operator, in the final message:
 1. **PR link** (`gh pr view "$branch_name" --json url --jq '.url'`).
@@ -347,9 +384,9 @@ operator, in the final message:
 5. **Deviations/deferrals** (if any): where the implementation intentionally differs from the spec, with the
    rationale.
 
-### 6.5 — Notify
+### 6.5 — Notify (optional, macOS example)
 ```bash
-osascript -e 'display notification "PR is up with a spec-completeness evidence report" with title "execute-task" sound name "Glass"'
+osascript -e 'display notification "PR is up with a spec-completeness evidence report" with title "implement-spec" sound name "Glass"'
 ```
 
 ---
@@ -370,10 +407,10 @@ incomplete step. Never restart a partially-complete run from scratch.
 
 ## What this workflow does NOT do (deliberate omissions)
 
-- **No merge-main.** Only merge base when there's a real conflict/stale CI; invoke `merge-main-fix-conflicts`
-  separately if needed. (This is the key difference from the `execute-ticket` *skill* variant.)
-- **No CI polling.** The push triggers CI; if it fails, invoke the fix-CI workflow separately.
-- **No Slack post.** Separate, human-invoked concern.
+- **No merge-main.** Only merge base when there's a real conflict/stale CI; run your merge/conflict workflow
+  separately if needed.
+- **No CI polling.** The push triggers CI; if it fails, invoke your fix-CI workflow separately.
+- **No chat/notification post.** Separate, human-invoked concern.
 - **No retention/cleanup of scratch fixtures beyond the run's own** — but DO clean up any test state you created
   in shared stores (Phase 5.3).
 
