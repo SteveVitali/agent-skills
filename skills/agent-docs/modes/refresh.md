@@ -4,10 +4,10 @@ Detect documentation drift between `AGENTS.md` / `agent_docs/` files and the
 actual codebase, then surgically update stale references, regenerate severely
 drifted sections, and produce new docs for uncovered packages.
 
-Invoked from `agent-docs.md` Phase 1 with the drift report from Phase 0
+Invoked from `../SKILL.md` Phase 1 with the drift report from Phase 0
 already in hand (`/tmp/agent-docs-freshness.json`). All edits MUST conform to
 the [Doc Authoring Guidelines](../guidelines.md). On completion, return to
-the shared tail (`agent-docs.md` Phase 2).
+the shared tail (`../SKILL.md` Phase 2).
 
 Run this mode periodically after major refactors, package restructurings, or
 whenever you suspect docs have drifted.
@@ -186,5 +186,5 @@ issues.
 
 ---
 
-**Done.** Return to `agent-docs.md` Phase 2 (validate → consistency sweep →
+**Done.** Return to `../SKILL.md` Phase 2 (validate → consistency sweep →
 CLAUDE.md bridge → quality checklist → commit).

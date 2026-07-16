@@ -1,6 +1,6 @@
 # implement-spec — Spec to Provably-Complete PR, Autonomously
 
-`implement-spec.md` is a workflow/skill that packs the full software development lifecycle — branch,
+The `implement-spec` skill (`SKILL.md`) is a workflow that packs the full software development lifecycle — branch,
 plan, implement, test, review, verify, ship — into a single autonomous agent run whose input is an
 **authoritative written spec** and whose output is a **pull request plus an evidence report** proving,
 acceptance criterion by acceptance criterion, that the implementation matches the spec.

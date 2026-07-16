@@ -1,5 +1,5 @@
 ---
-id: implement-spec
+name: implement-spec
 description: "Spec-driven, autonomous end-to-end: branch → plan + test matrix → implement (tests alongside) → self-review → gap-analysis vs spec → close gaps → rigorous downstream verification → PR + evidence report"
 inputs:
   - name: spec
@@ -215,7 +215,7 @@ is documented (style guide, common-pitfalls doc), follow it exactly.
 
 ## Phase 3: Self-review (design + mechanical) *(skip if `self_review=false`)*
 
-**Invoke the `self-review` skill (`skills/self-review/self-review.md`) and follow it completely.** Pass 1
+**Invoke the `self-review` skill (`skills/self-review/SKILL.md`) and follow it completely.** Pass 1
 (mechanical: the repo's verification command + mechanical checklists) and Pass 2 (Staff-Engineer design
 critique with full file reads). Fix everything it
 surfaces and re-verify. Max 3 verify-fix-review iterations. If *design* concerns persist after 3, record them in

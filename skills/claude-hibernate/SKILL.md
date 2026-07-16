@@ -1,5 +1,5 @@
 ---
-id: claude-hibernate
+name: claude-hibernate
 description: "Hibernate running Claude Code sessions before shutdown, wake them after reboot"
 inputs:
   - name: mode

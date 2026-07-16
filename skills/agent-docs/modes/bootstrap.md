@@ -4,9 +4,9 @@ Generate agent documentation from scratch for a codebase or subproject that
 has no existing agent docs. This mode produces publication-quality docs — the
 kind an experienced engineer who knows the codebase would trust and maintain.
 
-Invoked from `agent-docs.md` Phase 1. All output MUST conform to the
+Invoked from `../SKILL.md` Phase 1. All output MUST conform to the
 [Doc Authoring Guidelines](../guidelines.md). On completion, return to the
-shared tail (`agent-docs.md` Phase 2) for validation, the consistency sweep,
+shared tail (`../SKILL.md` Phase 2) for validation, the consistency sweep,
 the CLAUDE.md bridge, and commit.
 
 ---
@@ -370,5 +370,5 @@ follow-up action (but don't modify the external repo in this workflow run).
 
 ---
 
-**Done.** Return to `agent-docs.md` Phase 2 (validate → consistency sweep →
+**Done.** Return to `../SKILL.md` Phase 2 (validate → consistency sweep →
 CLAUDE.md bridge → quality checklist → commit).

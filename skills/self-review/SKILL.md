@@ -1,5 +1,5 @@
 ---
-id: self-review
+name: self-review
 description: "Two-pass self-review of the current branch: mechanical verification (build/test/lint + checklists) then a Staff Engineer design critique"
 inputs:
   - name: base_branch

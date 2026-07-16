@@ -1,5 +1,5 @@
 ---
-id: agent-docs
+name: agent-docs
 description: Create or converge agent documentation (AGENTS.md hierarchy) for a codebase — bootstrap mode generates docs from scratch, refresh mode detects and fixes drift
 inputs:
   - name: scope

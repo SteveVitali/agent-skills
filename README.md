@@ -27,10 +27,10 @@ Every skill here is:
 
 | Skill | Harness | Purpose |
 |---|---|---|
-| [`implement-spec`](skills/implement-spec/implement-spec.md) | Any | The full SDLC on a spec: branch → plan + test matrix → implement → self-review → spec gap analysis → live verification → PR + evidence report |
-| [`self-review`](skills/self-review/self-review.md) | Any | Two-pass review of the current branch: mechanical verification, then an independence-preserving design critique |
-| [`agent-docs`](skills/agent-docs/agent-docs.md) | Any | Create (`bootstrap`) or converge (`refresh`) an AGENTS.md-standard doc hierarchy |
-| [`claude-hibernate`](skills/claude-hibernate/claude-hibernate.md) | Claude Code | `hibernate` running sessions to disk before shutdown; `wake` them after reboot |
+| [`implement-spec`](skills/implement-spec/SKILL.md) | Any | The full SDLC on a spec: branch → plan + test matrix → implement → self-review → spec gap analysis → live verification → PR + evidence report |
+| [`self-review`](skills/self-review/SKILL.md) | Any | Two-pass review of the current branch: mechanical verification, then an independence-preserving design critique |
+| [`agent-docs`](skills/agent-docs/SKILL.md) | Any | Create (`bootstrap`) or converge (`refresh`) an AGENTS.md-standard doc hierarchy |
+| [`claude-hibernate`](skills/claude-hibernate/SKILL.md) | Claude Code | `hibernate` running sessions to disk before shutdown; `wake` them after reboot |
 
 ### implement-spec
 
@@ -73,44 +73,38 @@ Claude Code-specific, repo-agnostic; wake automation is macOS-only.
 
 ## Quick start
 
-Skills are Markdown programs for a capable agent: get the files, point your
-harness at them, and state the inputs conversationally.
+Skills follow the [Agent Skills](https://agentskills.io) format — a directory
+with a `SKILL.md` entry point plus supporting files — so harnesses that speak
+the standard load them directly, and everything else takes a one-line pointer.
 
 ```bash
 git clone https://github.com/<you>/agent-skills.git ~/agent-skills
 # or vendor it: git submodule add <url> vendor/agent-skills
 ```
 
-Then wire up a thin wrapper per harness — wrappers point, they don't copy:
+**Claude Code (or any Agent Skills-compatible harness)** — symlink the skills
+you want; no wrappers needed:
 
-**Claude Code** (slash command, `.claude/commands/implement-spec.md`):
-
-```markdown
-Read and follow ~/agent-skills/skills/implement-spec/implement-spec.md.
-Inputs: $ARGUMENTS
+```bash
+mkdir -p ~/.claude/skills
+ln -s ~/agent-skills/skills/* ~/.claude/skills/
 ```
 
-**Claude Code** (skill, `~/.claude/skills/implement-spec/SKILL.md`):
+The repo also carries a plugin manifest (`.claude-plugin/plugin.json`), so it
+can be installed as a Claude Code plugin from a marketplace instead.
 
-```markdown
----
-name: implement-spec
-description: Spec-driven end-to-end implementation with rigorous verification
----
-Read and follow ~/agent-skills/skills/implement-spec/implement-spec.md.
-```
-
-**Windsurf/Cascade** (workflow, `.windsurf/workflows/implement-spec.md`):
+**Windsurf/Cascade** (workflow wrapper, `.windsurf/workflows/implement-spec.md`
+— wrappers point, they don't copy):
 
 ```markdown
 ---
 description: Spec-driven end-to-end implementation with rigorous verification
 ---
-Read and follow <path-to>/agent-skills/skills/implement-spec/implement-spec.md.
+Read and follow <path-to>/agent-skills/skills/implement-spec/SKILL.md.
 ```
 
 **Any other agent, or none:** paste
-`Read ~/agent-skills/skills/self-review/self-review.md and execute it against
+`Read ~/agent-skills/skills/self-review/SKILL.md and execute it against
 this branch` into the chat — or follow the steps yourself.
 
 Inputs are declared in each skill's YAML frontmatter; pass them in natural
@@ -119,13 +113,18 @@ language ("implement docs/spec.md, skip the ledger, base off main").
 ## Repo layout
 
 ```
+.claude-plugin/plugin.json   # manifest: the repo doubles as a Claude Code plugin
 skills/<skill-name>/
-├── <skill-name>.md      # the workflow hub (YAML frontmatter + Markdown steps)
+├── SKILL.md             # entry point (Agent Skills format: frontmatter + steps)
 ├── README.md            # design rationale (where it exists)
 ├── modes/               # mode-specific step files, loaded on demand (where applicable)
 ├── scripts/             # supporting shell helpers (bash 3.2+ compatible)
 └── checklists/          # supporting checklists / shared reference docs (where applicable)
 ```
+
+One predictable entry filename means an agent (or tool) pointed at `skills/`
+knows where every skill starts; everything else in a skill directory is
+progressive-disclosure material referenced from its `SKILL.md`.
 
 ## Design principles
 
@@ -147,9 +146,9 @@ skills/<skill-name>/
 
 ## Authoring a new skill
 
-1. Create `skills/<name>/<name>.md` with frontmatter: `id`, `description`,
-   and `inputs` (each with `name`, `required`, `description`). Keep it
-   harness-neutral — no tool-specific directives in the leaf files.
+1. Create `skills/<name>/SKILL.md` with frontmatter: `name`, `description`,
+   and `inputs` (each with `name`, `required`, `description`). Keep the body
+   harness-neutral — no tool-specific directives in skill files.
 2. Write instructions that are **concrete enough to verify** ("run X, expect
    exit 0"), and calibrated to a frontier model: specify *what* and *why*,
    not keystroke-level *how*.
