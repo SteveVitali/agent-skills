@@ -1,0 +1,17 @@
+{
+  "name": "agent-skills",
+  "owner": {
+    "name": "Steve Vitali"
+  },
+  "plugins": [
+    {
+      "name": "agent-skills",
+      "source": "./",
+      "description": "Reusable, research-grounded skills for AI coding agents: implement-spec, self-review, agent-docs",
+      "version": "0.1.0",
+      "author": {
+        "name": "Steve Vitali"
+      }
+    }
+  ]
+}

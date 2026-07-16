@@ -1,115 +1,105 @@
 # agent-skills
 
-Reusable, research-grounded **skills** for AI coding agents.
+Rigorous engineering process for AI coding agents, packaged as portable
+[Agent Skills](https://agentskills.io): implement a spec end to end to a
+verified PR, review a branch with independent judgment, and keep AGENTS.md
+docs converged with the code they describe.
 
-Agent context files (`AGENTS.md`, `CLAUDE.md`) give an agent *knowledge*: what
-a codebase is, its conventions, its gotchas. Skills give it *process*: how to
-execute multi-step engineering work — implement a spec end to end, review its
-own code with independent judgment, keep docs converged with reality — with
-discipline that survives long horizons, context compaction, and model
-self-bias.
+- **Harness-agnostic** — standard `SKILL.md` directories. Claude Code, Codex,
+  Cursor, Gemini CLI, GitHub Copilot, and a growing list of clients load them
+  natively; anywhere else (Windsurf, Goose, a human with a terminal), a
+  one-line pointer to the skill file works.
+- **Codebase-agnostic** — no assumptions about your repo, language, or
+  toolchain. Build/test/lint commands are discovered from the repo or passed
+  as inputs, never hardcoded.
+- **Research-grounded** — durable ledgers, fresh-context review,
+  evidence-first reporting: the design decisions trace to the
+  agent-engineering literature
+  ([rationale](skills/implement-spec/README.md)).
 
-Every skill here is:
+## The flagship: `implement-spec`
 
-- **Codebase-agnostic** — no company, repo, or language assumptions. Build and
-  test commands are discovered from the repo or injected as inputs, never
-  hardcoded.
-- **Harness-agnostic** — plain Markdown plus portable shell (bash 3.2+). Works
-  from Claude Code, Cursor, Windsurf/Cascade, Goose, Codex-style agents, or a
-  human following the steps.
-- **Research-grounded** — the design decisions (durable ledgers, fresh-context
-  review, verification-first reporting) trace to the agent-engineering
-  literature; see the [implement-spec design rationale](skills/implement-spec/README.md)
-  for the synthesis and citations.
+Most agents can write plausible code from a spec. What they don't do reliably
+is everything around that — hold the plan across a long horizon, test what
+they wrote, catch where the implementation quietly diverges from the spec,
+and prove the result rather than assert it. `implement-spec` packages that
+discipline: hand it an agent-ready spec, and it runs the lifecycle
+autonomously, surfacing only at the end.
 
-## The skills
+```
+spec ─▶ branch ─▶ plan + test matrix ─▶ implement (tests alongside)
+     ─▶ two-pass self-review ─▶ gap analysis vs the spec ─▶ close gaps
+     ─▶ live verification ─▶ PR + acceptance-criteria evidence report
+```
 
-| Skill | Purpose |
-|---|---|
-| [`implement-spec`](skills/implement-spec/SKILL.md) | The full SDLC on a spec: branch → plan + test matrix → implement → self-review → spec gap analysis → live verification → PR + evidence report |
-| [`self-review`](skills/self-review/SKILL.md) | Two-pass review of the current branch: mechanical verification, then an independence-preserving design critique |
-| [`agent-docs`](skills/agent-docs/SKILL.md) | Create (`bootstrap`) or converge (`refresh`) an AGENTS.md-standard doc hierarchy |
+- **Evidence over claims** — "done" means every acceptance criterion in the
+  final report maps to a verifiable artifact (a test, a command's output, a
+  live check) — not that the model says so.
+- **Survives long horizons** — a durable run ledger on disk makes the run
+  resumable across crashes and context compaction.
+- **Proportional rigor** — every heavyweight phase (ledger, self-review, gap
+  analysis, tests, live verification) is individually opt-out, so a one-line
+  fix doesn't pay a ten-phase tax.
 
-### implement-spec
+The full design rationale, with the literature behind each phase, is in
+[skills/implement-spec/README.md](skills/implement-spec/README.md).
 
-Takes an agent-ready spec and runs the entire development lifecycle
-autonomously, surfacing only at the end with a PR link and an
-acceptance-criteria evidence report. Every rigor phase (gap analysis,
-self-review, tests, live verification, run ledger) is individually opt-out via
-inputs, so process weight scales with task weight. Its
-[README](skills/implement-spec/README.md) documents the research behind each
-phase.
+## The skills around it
 
-### self-review
+Two more skills back `implement-spec` and stand alone:
 
+### [`self-review`](skills/self-review/SKILL.md)
+
+Two-pass review of the current branch — and `implement-spec`'s review phase.
 Pass 1 is mechanical: auto-discovered build/test/lint (via
 [`verify.sh`](skills/self-review/scripts/verify.sh), which infers the
 toolchain when the repo doesn't declare one) plus binary
 [checklists](skills/self-review/checklists/general.md). Pass 2 is design
 critique under independence rules — fresh context where the harness supports
 subagents, evidence-from-disk discipline where it doesn't — with a
-demonstrability bar for every flag raised. Used standalone or as
-implement-spec's review phase.
+demonstrability bar for every flag raised.
 
-### agent-docs
+### [`agent-docs`](skills/agent-docs/SKILL.md)
 
-One workflow, two modes converging on the same target state — docs an agent
-can trust cold. `bootstrap` generates a hierarchy from scratch (reconnaissance
-→ gotcha mining → generation); `refresh` detects and fixes drift. The mode is
+Creates and maintains the knowledge layer the other skills run on: an
+AGENTS.md-standard doc hierarchy an agent can trust cold. One workflow, two
+modes — `bootstrap` generates docs from scratch (reconnaissance → gotcha
+mining → generation), `refresh` detects and fixes drift. The mode is
 auto-selected by a deterministic, CI-gateable
 [drift detector](skills/agent-docs/scripts/check-agent-docs-freshness.sh)
 that classifies broken references as *went stale* vs *authoring error* using
 git history. Both modes share the
 [Doc Authoring Guidelines](skills/agent-docs/guidelines.md).
 
-See also [`claude-hibernate`](https://github.com/SteveVitali/claude-hibernate)
-— hibernate running Claude Code sessions before shutdown, wake them after
-reboot. It began here, but as a Claude Code-specific utility it lives in its
-own repo.
+## Install
 
-## Quick start
+**As a Claude Code plugin:**
 
-Skills follow the [Agent Skills](https://agentskills.io) format — a directory
-with a `SKILL.md` entry point plus supporting files — so harnesses that speak
-the standard load them directly, and everything else takes a one-line pointer.
+```
+/plugin marketplace add SteveVitali/agent-skills
+/plugin install agent-skills@agent-skills
+```
+
+**Or by symlink**, for any client that discovers skills on disk
+(`~/.claude/skills/`, a project's `.agents/skills/`, etc.):
 
 ```bash
 git clone https://github.com/SteveVitali/agent-skills.git ~/agent-skills
-# or vendor it: git submodule add https://github.com/SteveVitali/agent-skills.git vendor/agent-skills
-```
-
-**Claude Code (or any Agent Skills-compatible harness)** — symlink the skills
-you want; no wrappers needed:
-
-```bash
-mkdir -p ~/.claude/skills
 ln -s ~/agent-skills/skills/* ~/.claude/skills/
 ```
 
-The repo also carries a plugin manifest (`.claude-plugin/plugin.json`), so it
-can be installed as a Claude Code plugin from a marketplace instead.
+**Clients without native skill support** (e.g. Windsurf): a one-line
+workflow or rule pointing at the skill file is enough — *"Read and follow
+`<path>/skills/implement-spec/SKILL.md`"*.
 
-**Windsurf/Cascade** (workflow wrapper, `.windsurf/workflows/implement-spec.md`
-— wrappers point, they don't copy):
-
-```markdown
----
-description: Spec-driven end-to-end implementation with rigorous verification
----
-Read and follow <path-to>/agent-skills/skills/implement-spec/SKILL.md.
-```
-
-**Any other agent, or none:** paste
-`Read ~/agent-skills/skills/self-review/SKILL.md and execute it against
-this branch` into the chat — or follow the steps yourself.
-
-Inputs are declared in each skill's YAML frontmatter; pass them in natural
-language ("implement docs/spec.md, skip the ledger, base off main").
+Each skill declares its inputs in `SKILL.md` frontmatter; state them in
+natural language ("implement docs/spec.md, skip the ledger, base off main").
+The only system requirements are `git`, `bash` 3.2+, and standard Unix tools.
 
 ## Repo layout
 
 ```
-.claude-plugin/plugin.json   # manifest: the repo doubles as a Claude Code plugin
+.claude-plugin/              # plugin + marketplace manifests (Claude Code)
 skills/<skill-name>/
 ├── SKILL.md             # entry point (Agent Skills format: frontmatter + steps)
 ├── README.md            # design rationale (where it exists)
@@ -142,24 +132,36 @@ progressive-disclosure material referenced from its `SKILL.md`.
 
 ## Authoring a new skill
 
-1. Create `skills/<name>/SKILL.md` with frontmatter: `name`, `description`,
-   and `inputs` (each with `name`, `required`, `description`). Keep the body
-   harness-neutral — no tool-specific directives in skill files.
+1. Create `skills/<name>/SKILL.md` with frontmatter: `name`, `description`
+   (what it does *and* when to use it), and `inputs` (each with `name`,
+   `required`, `description`). Keep the body harness-neutral — no
+   tool-specific directives in skill files.
 2. Write instructions that are **concrete enough to verify** ("run X, expect
    exit 0"), and calibrated to a frontier model: specify *what* and *why*,
    not keystroke-level *how*.
-3. If the skill exceeds ~400 lines or has distinct modes, split into a hub +
-   `modes/` files (see `agent-docs`).
+3. If the skill nears the spec's ~500-line ceiling for `SKILL.md` or has
+   distinct modes, split into a hub + `modes/` files (see `agent-docs`).
 4. Shell helpers go in `scripts/`: bash 3.2-compatible, self-contained,
    read-only by default — anything mutating must say so in its header, and
    known limitations belong in the header too.
-5. No company, repo, or language assumptions anywhere: discover from the repo
-   or take it as an input.
+5. No assumptions about repo, language, or toolchain anywhere: discover from
+   the repo or take it as an input.
 
-## Requirements
+## Related
 
-- `git`, `bash` 3.2+ (macOS system bash works), standard Unix tools —
-  OS-portable throughout
+- **[Agent Skills](https://agentskills.io/specification)** — the open format
+  these skills conform to.
+- **[anthropics/skills](https://github.com/anthropics/skills)** — Anthropic's
+  reference collection; mostly *capability* skills (documents, design,
+  testing tools).
+- **[obra/superpowers](https://github.com/obra/superpowers)** — a full
+  interactive development methodology (brainstorm → plan → subagent-driven
+  TDD). Kindred spirit, different center of gravity: superpowers optimizes
+  the human-in-the-loop workflow; agent-skills optimizes the autonomous run
+  and its evidence trail.
+- **[claude-hibernate](https://github.com/SteveVitali/claude-hibernate)** —
+  hibernate running Claude Code sessions across reboots. Began in this repo;
+  Claude Code-specific by nature, so it lives on its own.
 
 ## License
 

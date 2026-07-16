@@ -1,5 +1,6 @@
 ---
 name: implement-spec
+license: MIT
 description: "Spec-driven, autonomous end-to-end: branch → plan + test matrix → implement (tests alongside) → self-review → gap-analysis vs spec → close gaps → rigorous downstream verification → PR + evidence report"
 inputs:
   - name: spec
