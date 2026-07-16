@@ -1,46 +1,22 @@
----
-id: bootstrap-agent-docs
-description: Generate agent documentation from scratch for an undocumented codebase or subproject
-inputs:
-  - name: scope
-    required: true
-    description: "Directory path (absolute or relative to repo root) to bootstrap. Can target any repo."
-  - name: depth
-    required: false
-    description: "Doc hierarchy depth: 'flat' (single AGENTS.md), 'hierarchical' (root + subproject AGENTS.md files), or 'deep' (hierarchical + agent_docs/ reference library). Default: auto-detect based on repo size."
-  - name: cross-repo
-    required: false
-    description: "When set, also generate integration surface documentation describing how this codebase connects to other documented repos."
----
+# Mode: bootstrap
 
-# Bootstrap Agent Docs
-
-Generate agent documentation from scratch for a codebase or subproject that has
-no existing agent docs. This workflow produces publication-quality docs — the
+Generate agent documentation from scratch for a codebase or subproject that
+has no existing agent docs. This mode produces publication-quality docs — the
 kind an experienced engineer who knows the codebase would trust and maintain.
 
-**When to use this vs. `refresh-agent-docs`:**
-- **Bootstrap** = no docs exist yet (cold start)
-- **Refresh** = docs exist but may have drifted from code
-
-This workflow references the **Doc Authoring Guidelines** from the sibling
-skill `refresh-agent-docs` (`skills/refresh-agent-docs/refresh-agent-docs.md`)
-— all generated docs MUST conform to those guidelines, including the
-**Standard Alignment** section (docs follow the AGENTS.md open standard:
-nested files, nearest-file-wins precedence, and length budgets that exist
-because agents mechanically truncate or under-weight over-budget docs). Read
-the guidelines before proceeding.
+Invoked from `agent-docs.md` Phase 1. All output MUST conform to the
+[Doc Authoring Guidelines](../guidelines.md). On completion, return to the
+shared tail (`agent-docs.md` Phase 2) for validation, the consistency sweep,
+the CLAUDE.md bridge, and commit.
 
 ---
 
-## Steps
-
-### 1 — Repo Reconnaissance
+## B.1 — Repo Reconnaissance
 
 Systematically characterize the codebase before writing anything. Gather facts,
 don't interpret yet.
 
-#### 1.1 — Build System Detection
+### B.1.1 — Build System Detection
 
 Identify the primary build system and its implications:
 
@@ -63,14 +39,14 @@ Record:
 - Lint/format commands
 - Any code generation steps (proto compilation, BUILD-file generation, codegen scripts)
 
-#### 1.2 — Language & Framework Identification
+### B.1.2 — Language & Framework Identification
 
 For each language present, note:
 - Version constraints (e.g., a pinned language version in the manifest, `"target": "es2022"` in tsconfig)
 - Framework and version (e.g. Rails 7, React 18, Spring Boot 3)
 - Package manager and lockfile format
 
-#### 1.3 — Entry Point Mapping
+### B.1.3 — Entry Point Mapping
 
 Find the main entry points — these orient agents to "where does execution start":
 - Server entry points (`main`, `App.*`, `app.*`, `index.*`)
@@ -78,14 +54,14 @@ Find the main entry points — these orient agents to "where does execution star
 - Configuration loading (how config flows in)
 - CLI commands or scripts
 
-#### 1.4 — Module/Package Enumeration
+### B.1.4 — Module/Package Enumeration
 
 List top-level modules or packages. For each, note:
 - Name and approximate size (file count)
 - Primary responsibility (1 sentence)
 - Whether it's actively developed or legacy/stable
 
-#### 1.5 — Test Infrastructure
+### B.1.5 — Test Infrastructure
 
 Identify:
 - Test framework(s): e.g. JUnit, RSpec, Jest, Vitest, pytest, go test
@@ -96,13 +72,13 @@ Identify:
 
 ---
 
-### 2 — Gotcha & Convention Discovery Protocol
+## B.2 — Gotcha & Convention Discovery Protocol
 
 This is the highest-ROI step. The goal is to identify everything that will
 **silently break an agent's work** or cause wasted iterations. Mine these
 sources systematically:
 
-#### 2.1 — Linter & Formatter Configs
+### B.2.1 — Linter & Formatter Configs
 
 Read ALL of these if they exist:
 - `.eslintrc*`, `eslint.config.*` — JS/TS rules
@@ -121,7 +97,7 @@ Skip obvious ones (semicolons, quotes). Focus on:
 - File/directory naming patterns
 - Max line length or complexity rules that affect code structure
 
-#### 2.2 — CI Pipeline Analysis
+### B.2.2 — CI Pipeline Analysis
 
 Read CI configuration files:
 - `Jenkinsfile` / `.github/workflows/*.yml` / `.circleci/config.yml` / `.gitlab-ci.yml`
@@ -134,7 +110,7 @@ Read CI configuration files:
 - Build matrix (what environments/versions are tested?)
 - Deployment triggers (what branches auto-deploy?)
 
-#### 2.3 — Generated/Protected Files
+### B.2.3 — Generated/Protected Files
 
 Identify files agents must NEVER edit directly:
 - Auto-generated files (generated build files, lockfiles, codegen output)
@@ -147,7 +123,7 @@ Look for patterns:
 - Scripts named `generate-*`, `codegen-*`, `sync-*`
 - Makefile targets named `generate`, `codegen`, `proto`
 
-#### 2.4 — Dependency Constraints
+### B.2.4 — Dependency Constraints
 
 Check for:
 - Version pinning that would break if agents add deps at wrong versions
@@ -156,7 +132,7 @@ Check for:
 - Internal package references (monorepo cross-deps)
 - Peer dependency requirements
 
-#### 2.5 — Error Archaeology
+### B.2.5 — Error Archaeology
 
 Mine git history for recurring failure patterns:
 
@@ -175,7 +151,7 @@ git log --since="3 months ago" --name-only --pretty=format: -- <scope> | sort | 
 same category (import ordering, type errors, build failures), that's a gotcha
 worth documenting.
 
-#### 2.6 — Implicit Conventions
+### B.2.6 — Implicit Conventions
 
 Look for conventions not enforced by tooling but present in the code:
 - File naming patterns (PascalCase components? kebab-case routes?)
@@ -187,7 +163,7 @@ Look for conventions not enforced by tooling but present in the code:
 
 Read 5-10 representative files across different areas to spot these.
 
-#### 2.7 — Architectural Boundaries
+### B.2.7 — Architectural Boundaries
 
 Identify what an agent should NOT cross:
 - Service boundaries (don't modify another service's internals)
@@ -197,7 +173,7 @@ Identify what an agent should NOT cross:
 
 ---
 
-### 3 — Hierarchy Design
+## B.3 — Hierarchy Design
 
 Based on reconnaissance results, decide on documentation depth.
 
@@ -231,14 +207,13 @@ File placement:
 
 ---
 
-### 4 — Generate Documentation
+## B.4 — Generate Documentation
 
-Using facts gathered in Steps 1-2, generate docs following the **Doc Authoring
-Guidelines** section of `refresh-agent-docs`. All structural rules, content
-rules, stack-specific rules, and regeneration rules from that section apply
-here.
+Using facts gathered in B.1-B.2, generate docs following the
+[Doc Authoring Guidelines](../guidelines.md). All structural rules, content
+rules, stack-specific rules, and regeneration rules apply here.
 
-#### 4.1 — Root AGENTS.md
+### B.4.1 — Root AGENTS.md
 
 Generate a root AGENTS.md with these sections (skip sections that don't apply):
 
@@ -269,11 +244,11 @@ Authoring Guidelines' Structural Rules.>
 
 ## Code Conventions
 
-<Rules extracted from Step 2.1 and 2.6. Use CORRECT/WRONG examples.>
+<Rules extracted from B.2.1 and B.2.6. Use CORRECT/WRONG examples.>
 
 ## Critical Gotchas
 
-<Numbered, most dangerous first. These come from Steps 2.2-2.5.
+<Numbered, most dangerous first. These come from B.2.2-B.2.5.
 Format: bold one-line summary + brief explanation of WHY it's dangerous.>
 
 ## Terminology
@@ -293,12 +268,12 @@ Format: bold one-line summary + brief explanation of WHY it's dangerous.>
 <What's safe, what needs permission, what's forbidden>
 ```
 
-Target length (see the shared length rule in the **Doc Authoring Guidelines**):
+Target length (see the shared length rule in the Doc Authoring Guidelines):
 a leaf/package AGENTS.md stays ~150 lines; a **monorepo root** AGENTS.md that
 must cover several services may run up to ~250 lines. Keep it concise and
 scannable regardless.
 
-#### 4.2 — Subproject AGENTS.md (hierarchical/deep only)
+### B.4.2 — Subproject AGENTS.md (hierarchical/deep only)
 
 For each significant subproject, generate a focused AGENTS.md with:
 - Purpose (1-2 sentences, in context of the parent)
@@ -310,7 +285,37 @@ For each significant subproject, generate a focused AGENTS.md with:
 
 Target: ~80-150 lines each.
 
-#### 4.3 — Deep Reference Docs (deep only)
+### B.4.3 — Minimal AGENTS.md (single uncovered package)
+
+The smallest unit of bootstrap — used when refresh mode fills a coverage gap,
+or for minor packages in a hierarchical layout. Read the first 30-50 lines of
+each source file in the package (module declaration, imports, type
+definitions, doc comments), then generate:
+
+```markdown
+# AGENTS.md — <Package Name>
+
+## Purpose
+
+<1-2 sentences describing what this package does>
+
+## Key Files
+
+| File | Lines | Purpose |
+|---|---|---|
+| `FileName.ext` | ~N lines | One-sentence description |
+
+## Test Command
+
+\`\`\`bash
+<exact copy-pasteable test invocation for this package>
+\`\`\`
+```
+
+Only generate docs for packages where the purpose would be non-obvious to an
+agent reading the code cold. Don't over-document on first pass.
+
+### B.4.4 — Deep Reference Docs (deep only)
 
 For the primary development area, generate `agent_docs/` with files like:
 - `architecture_overview.md` — service topology, data flow
@@ -327,53 +332,16 @@ touches matching files, instead of costing tokens every session. Use
 `agent_docs/` for harness-agnostic reference material and `.claude/rules/`
 for path-scoped rules; don't duplicate content across both.
 
-#### 4.4 — CLAUDE.md bridge (default)
-
-Claude Code reads `CLAUDE.md`, not `AGENTS.md` — without a bridge, everything
-generated above is invisible to it. Unless the user opts out or the repo
-already has a `CLAUDE.md`, generate one at the repo root containing:
-
-```markdown
-@AGENTS.md
-```
-
-plus (only if needed) Claude Code-specific notes below the import: settings,
-permissions, hook expectations. Keep it to the import line if there is nothing
-Claude-specific to add — the point is one source of truth in AGENTS.md, shared
-across harnesses.
-
 ---
 
-### 5 — Validate
-
-After generating all docs, run the freshness evaluator (shipped with the
-sibling `refresh-agent-docs` skill) to confirm zero issues:
-
-```bash
-bash <skills>/refresh-agent-docs/scripts/check-agent-docs-freshness.sh <scope>
-```
-
-If the evaluator reports issues (which would indicate the bootstrap generated
-broken references), fix them immediately. This should produce 0 critical issues
-on a fresh bootstrap — if it doesn't, something was generated from assumption
-rather than verification.
-
-Additionally, manually verify:
-- Every build/test command is copy-pasteable and valid
-- Every file path in backticks actually exists
-- Every line count uses `wc -l` and follows rounding rules from the refresh workflow
-- No "prose paragraphs" — only tables, bullets, code blocks
-
----
-
-### 6 — Cross-Repo Integration Surface (--cross-repo)
+## B.5 — Cross-Repo Integration Surface (--cross-repo)
 
 **Only execute if user passed `--cross-repo`.** Skip entirely otherwise.
 
 When a bootstrapped codebase interacts with other repos that already have agent
 docs, document the integration boundaries:
 
-#### 6.1 — Identify touchpoints
+### B.5.1 — Identify touchpoints
 
 For each documented external repo:
 - API calls made TO that repo (endpoints, contracts)
@@ -382,7 +350,7 @@ For each documented external repo:
 - Shared packages/libraries consumed
 - Deployment dependencies (must deploy X before Y)
 
-#### 6.2 — Generate integration section
+### B.5.2 — Generate integration section
 
 Add a `## Integration Surface` section to the root AGENTS.md:
 
@@ -395,33 +363,12 @@ Add a `## Integration Surface` section to the root AGENTS.md:
 | `other-repo` | Provides package | `@org/package-name@^1.x` | Pin to major version |
 ```
 
-#### 6.3 — Cross-reference
+### B.5.3 — Cross-reference
 
 If the external repo's AGENTS.md doesn't mention this codebase, note that as a
 follow-up action (but don't modify the external repo in this workflow run).
 
 ---
 
-## What This Workflow Does NOT Do
-
-- **Refresh existing docs** — use `refresh-agent-docs` for that
-- **Generate API documentation** — this produces agent orientation docs, not
-  user-facing API docs
-- **Set up CI integration** — docs are manually triggered for now
-- **Make architectural decisions** — it documents what IS, not what SHOULD BE
-- **Replace human review** — generated docs should be reviewed by a human who
-  knows the codebase before being treated as authoritative
-
----
-
-## Quality Checklist
-
-Before committing bootstrapped docs, verify:
-
-- [ ] Every command in "Build & Test" actually works when copy-pasted
-- [ ] Critical Gotchas are genuinely non-obvious (not just "follow the style guide")
-- [ ] No section is generic filler — every line earns its place
-- [ ] File paths are verified against the filesystem (use `ls` / `find`)
-- [ ] Line counts use actual `wc -l` values with proper rounding
-- [ ] The doc reads as if written by a knowledgeable engineer, not a template
-- [ ] An agent reading this doc cold could start productive work within 1 task
+**Done.** Return to `agent-docs.md` Phase 2 (validate → consistency sweep →
+CLAUDE.md bridge → quality checklist → commit).
