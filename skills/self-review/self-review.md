@@ -83,7 +83,10 @@ Then apply, in order:
    are (a) binary and (b) would fail the build or CI (fatal warnings, import
    rules, naming rules, generated-file policies). Apply that list.
 
-Walk through every changed file and verify each applicable checklist item.
+Walk the checklists **one category at a time, with that category as your sole
+focus for the sweep** (all files for diff hygiene, then all files for safety,
+and so on) — controlled experiments show that an explicit "look for X" focus
+directive raises defect detection far more than checklist possession alone.
 Fix any violations found. If fixes were made, re-run Step 1.1 to confirm
 nothing broke.
 
@@ -96,9 +99,29 @@ where the frontier model's intelligence earns its keep. No checklist can
 enumerate these concerns — they require taste, judgment, and deep experience
 with what makes software maintainable over years.
 
-### The Reviewer Persona
+### Independence
 
-Adopt this persona completely for the duration of Pass 2:
+The agent that wrote the code is a systematically biased reviewer of it: LLM
+evaluators favor their own generations, and the effect is amplified when the
+reviewing context contains the memory of writing — you remember the *intent*
+and read the intent into the code. Therefore:
+
+- **Where the harness supports subagents**, run Pass 2 in a **fresh context**
+  given only: the base-branch diff, the changed files (to read in full), the
+  standards below, and — if invoked by a parent workflow — the spec/ticket.
+  Not the implementation history or conversation.
+- **Where it doesn't**, apply the fallback discipline: every judgment must be
+  argued from what is on disk, re-read in full — never from memory of writing
+  it. If you catch yourself thinking "this is fine, I know why I did it,"
+  re-read the code as evidence instead.
+
+### The Reviewer Standards
+
+Review against the standards below, directing your attention to each concern
+in turn. (The framing is a working stance, not magic: evidence shows role
+assignment by itself doesn't improve judgment — what does measurably help is
+explicitly focusing attention on each named concern, which is what the
+categories below are for.)
 
 > You are a Staff Engineer with 15+ years of experience building and
 > maintaining production distributed systems. You have mass-reviewed
@@ -209,9 +232,10 @@ Adopt this persona completely for the duration of Pass 2:
    the changed code fits into the broader module. The goal is to see the
    change the way a reviewer who knows the codebase would see it.
 
-4. **For each file, evaluate against the design criteria above.** Be honest
-   and critical. The point is not to validate your own work — it's to find
-   the things a rigorous human reviewer would find.
+4. **For each file, evaluate against the design criteria above** — one
+   category at a time; a focused sweep per concern outperforms one diffuse
+   read. Be honest and critical. The point is not to validate your own work —
+   it's to find the things a rigorous human reviewer would find.
 
 5. **For genuine issues: fix them.** Don't just note problems — resolve them.
    A self-review that produces a list of "consider doing X" is not a review,
@@ -226,6 +250,12 @@ Adopt this persona completely for the duration of Pass 2:
   comments on code that's already style-consistent and functionally correct.
   If the code follows established patterns and handles its cases, let it
   stand.
+
+- **Every flag must be demonstrable.** For each issue you raise, you must be
+  able to state at least one of: the input/sequence that makes it fail, the
+  contract or invariant it violates, or the concrete maintenance cost it
+  incurs. LLM critics are known to hallucinate plausible-sounding bugs; if
+  you cannot articulate the demonstration, the issue isn't real — drop it.
 
 - **Pragmatism over perfection.** The goal is production-quality code, not
   platonic-ideal code. If a minor abstraction improvement would require

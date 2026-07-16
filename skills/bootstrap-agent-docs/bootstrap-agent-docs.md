@@ -25,8 +25,11 @@ kind an experienced engineer who knows the codebase would trust and maintain.
 
 This workflow references the **Doc Authoring Guidelines** from the sibling
 skill `refresh-agent-docs` (`skills/refresh-agent-docs/refresh-agent-docs.md`)
-— all generated docs MUST conform to those guidelines. Read them before
-proceeding.
+— all generated docs MUST conform to those guidelines, including the
+**Standard Alignment** section (docs follow the AGENTS.md open standard:
+nested files, nearest-file-wins precedence, and length budgets that exist
+because agents mechanically truncate or under-weight over-budget docs). Read
+the guidelines before proceeding.
 
 ---
 
@@ -317,13 +320,27 @@ For the primary development area, generate `agent_docs/` with files like:
 
 Target: each file 50-150 lines, focused on ONE topic.
 
-#### 4.4 — CLAUDE.md (optional, if .claude/ infrastructure exists)
+**Claude Code alternative:** when the repo's primary agent harness is Claude
+Code, topic docs can instead go in `.claude/rules/*.md` with `paths:` glob
+frontmatter — each rule file then loads into context *only* when the agent
+touches matching files, instead of costing tokens every session. Use
+`agent_docs/` for harness-agnostic reference material and `.claude/rules/`
+for path-scoped rules; don't duplicate content across both.
 
-If the repo has a `.claude/` directory or you're generating Claude Code-specific
-guidance, create a `CLAUDE.md` that:
-- Points to AGENTS.md with `@` references
-- Provides quick-reference commands
-- Notes any Claude Code-specific settings or permissions
+#### 4.4 — CLAUDE.md bridge (default)
+
+Claude Code reads `CLAUDE.md`, not `AGENTS.md` — without a bridge, everything
+generated above is invisible to it. Unless the user opts out or the repo
+already has a `CLAUDE.md`, generate one at the repo root containing:
+
+```markdown
+@AGENTS.md
+```
+
+plus (only if needed) Claude Code-specific notes below the import: settings,
+permissions, hook expectations. Keep it to the import line if there is nothing
+Claude-specific to add — the point is one source of truth in AGENTS.md, shared
+across harnesses.
 
 ---
 

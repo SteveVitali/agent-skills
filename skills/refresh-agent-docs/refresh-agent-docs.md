@@ -27,6 +27,17 @@ These guidelines govern ALL documentation produced by this workflow. Follow
 them exactly when editing or generating any agent documentation. (The
 `bootstrap-agent-docs` sibling skill references these same guidelines.)
 
+### Standard Alignment
+
+Generated docs conform to the **AGENTS.md open standard** (agents.md, stewarded
+by the Agentic AI Foundation): plain Markdown, nested files per subproject,
+**nearest-file-wins precedence** (agents read the closest AGENTS.md in the
+directory tree). The length budgets below are not taste — they are mechanical:
+Claude Code's guidance is that files beyond ~200 lines "consume more context
+and reduce adherence", and OpenAI Codex concatenates the AGENTS.md chain
+root-down with a **32 KiB default cap**, silently truncating anything beyond
+it. Over-budget docs literally stop being read.
+
 ### Structural Rules
 
 1. **AGENTS.md length** — a leaf/package AGENTS.md stays ~150 lines. A **monorepo
@@ -69,6 +80,15 @@ them exactly when editing or generating any agent documentation. (The
    authoritative references written by a knowledgeable engineer.
 6. **Terminology section** — define domain-specific terms, abbreviations, and
    acronyms that agents won't know from general training.
+7. **Concrete enough to verify** — every instruction must be checkable:
+   "run `npm test` before committing" not "test your changes"; "handlers live
+   in `src/api/handlers/`" not "keep files organized". If you can't state how
+   an agent would verify compliance, rewrite the instruction until you can.
+8. **No contradictions across the hierarchy** — when two rules conflict
+   (root vs nested AGENTS.md, or two sections of one doc), agents pick one
+   arbitrarily. Every edit must leave the hierarchy consistent; resolve
+   conflicts in favor of the more specific (nearest) doc and delete or scope
+   the loser.
 
 ### Stack-Specific Rules
 
@@ -135,6 +155,14 @@ list. Categorize the work needed:
 - **Critical issues** — fix immediately (broken references mislead agents)
 - **Moderate issues** — fix if clearly stale; use judgment on borderline cases
 - **Minor issues** — address coverage gaps only for packages with ≥5 source files
+
+Missing references carry a git-history classification tag:
+- **`[went stale: …]`** — the file existed when the doc was last edited and
+  has since moved/been renamed/deleted. Trace where it went (`git log --follow`,
+  search for the basename) and update the reference to the successor.
+- **`[authoring error: …]`** — the reference never matched a real file even
+  when written. Don't hunt for a successor; verify what the doc *meant* against
+  the actual source and rewrite or remove the claim.
 
 ### 4 — Fix critical issues
 
@@ -216,9 +244,16 @@ Re-run the detection script to confirm fixes resolved the issues:
 bash scripts/check-agent-docs-freshness.sh <scope>
 ```
 
-- If critical issues = 0: proceed to commit
+- If critical issues = 0: proceed to the consistency sweep
 - If critical issues remain: iterate (max 2 additional attempts)
 - If still failing after 3 total attempts: report remaining issues to the user
+
+**Consistency sweep** (touched docs only): re-read every doc this run edited
+plus its parent AGENTS.md, checking for rules that now contradict each other
+(build commands that differ, conventions stated one way at the root and
+another way in a nested doc, gotchas that a fix made obsolete). Contradicting
+instructions cause agents to pick one arbitrarily — resolve per the
+no-contradictions rule in the Doc Authoring Guidelines.
 
 ### 9 — Commit
 
@@ -336,10 +371,25 @@ introduce new structural issues).
 
 ---
 
+## Optional CI Integration
+
+The structural detector is fast, deterministic, and exit-code-gated — suitable
+as a PR check. Drift research (DOCER, EMSE 2023) found broken doc references in
+~29% of the top-1000 GitHub repos, typically unnoticed *for years*, precisely
+because checking was manual; the same work ships a PR-triggered action because
+catching drift at change time beats periodic sweeps. Recommended split:
+
+- **In CI (structural only)**: run `check-agent-docs-freshness.sh <scope>` on
+  PRs that touch source or docs; fail (or warn) on critical issues. No LLM
+  involved — cheap and deterministic.
+- **Manual (this workflow)**: the LLM-driven fixing, regeneration, and `--deep`
+  semantic verification stay human-triggered.
+
 ## What This Workflow Does NOT Do
 - **Convention drift detection** — if the team adopts new patterns, that requires
   human input to update "Code Conventions" sections.
 - **Cross-repo knowledge** — data flows between services need a different
   mechanism (a cross-repo synthesis workflow, if you maintain one).
-- **Automatic scheduling** — this is manually triggered. Run it when you suspect
+- **Automatic doc rewriting in CI** — only the structural *detector* belongs in
+  CI (see above). The LLM refresh is manually triggered: run it when you suspect
   drift (after refactors, after merging large PRs, periodically).

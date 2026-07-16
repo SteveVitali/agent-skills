@@ -23,6 +23,16 @@
 #     usually infeasible); this script exits 2 with a hint instead.
 #   - Compatible with bash 3.2+ (macOS default). No `set -e`: we continue
 #     after individual failures to report all results.
+#
+# Known limitations (callers should compensate where they matter):
+#   - Monorepo workspaces: only ROOT-level manifests/scripts are inferred.
+#     npm/pnpm/yarn workspaces, Cargo workspace members, and Go multi-module
+#     layouts are exercised only insofar as their root scripts fan out.
+#   - Gradle without a checked-in ./gradlew wrapper is skipped (no global
+#     `gradle` invocation — version mismatch risk outweighs coverage).
+#   - No changed-files scoping: detected checks run repo-wide. The --against
+#     flag is reserved but UNIMPLEMENTED; for diff-scoped verification use a
+#     repo-provided changed-files → targets mapper instead.
 
 set -o pipefail
 

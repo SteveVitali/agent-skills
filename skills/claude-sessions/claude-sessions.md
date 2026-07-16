@@ -30,9 +30,11 @@ The helper script `scripts/claude-sessions.sh` combines three signals:
    own ancestors, so the session you are typing in is auto-excluded.)
 2. **Working directory** — `lsof -p <pid> -d cwd` maps each process to its cwd.
 3. **Transcript** — the newest `.jsonl` in the matching
-   `~/.claude/projects/<mangled-cwd>/` folder is that process's session. When
-   several sessions share one directory, the N newest transcripts map to the N
-   processes there.
+   `~/.claude/projects/<mangled-cwd>/` folder is that process's session. The
+   transcript layout is version-dependent — older Claude Code versions write
+   `<project>/<id>.jsonl`, newer ones `<project>/sessions/<id>.jsonl` — so the
+   script checks both locations. When several sessions share one directory, the
+   N newest transcripts map to the N processes there.
 
 `snapshot` records this to the snapshot file; `restore` reads *only* the file
 (the live processes are gone by then).
@@ -44,7 +46,9 @@ Canonical location: `${XDG_STATE_HOME:-~/.local/state}/claude-sessions-snapshot.
 with `CLAUDE_SESSIONS_SNAPSHOT`.
 
 Each entry records `session_id`, `cwd`, `branch`, and `summary`, plus a
-top-level `snapshot_at` timestamp, `scope`, and `count`.
+top-level `snapshot_at` timestamp, `scope`, and `count`. Writing a new snapshot
+keeps one generation of backup at `<snapshot>.prev`, so a repo-scoped snapshot
+cannot irrecoverably clobber an earlier `--all` one.
 
 ## Usage
 
@@ -56,6 +60,7 @@ scripts/claude-sessions.sh snapshot --all    # every Claude session on the machi
 # --- After reboot: bring them back ---
 scripts/claude-sessions.sh restore           # opens a tab per session, resuming each
 scripts/claude-sessions.sh restore --dry-run # just print the commands first
+scripts/claude-sessions.sh restore --fork    # resume with --fork-session (new ids)
 
 # --- Ad-hoc inspection (read-only, live) ---
 scripts/claude-sessions.sh list              # table of running sessions (default: repo)
@@ -68,7 +73,10 @@ sessions per row) in a single new window. If iTerm2 is not installed it falls
 back to **Terminal.app** tabs (Terminal cannot make arbitrary panes); if
 neither is available it prints the commands to paste manually. Sessions whose
 `cwd` no longer exists are skipped with a notice. `--resume <id>` must run from
-the original directory; the script always `cd`s there first.
+the original directory; the script always `cd`s there first. With `--fork`,
+each resume gets `--fork-session`, branching into a fresh session id instead of
+writing back into the original transcript — use it whenever the original
+processes might still be alive.
 
 ## Recommended procedure
 
@@ -79,6 +87,12 @@ the original directory; the script always `cd`s there first.
 
 ## Caveats
 
+- **Unsupported surface**: Anthropic's session docs state the transcript entry
+  format "is internal to Claude Code and changes between versions, so scripts
+  that parse these files directly can break on any release." This tool touches
+  that surface as lightly as possible — filenames for session ids, first-line
+  `summary` on a best-effort basis (falls back to empty) — but a Claude Code
+  update can still break detection; re-verify with `list` after upgrades.
 - The newest-transcript-per-cwd mapping is a heuristic — reliable in practice,
   only theoretically ambiguous when two sessions in one directory write at the
   same instant.
@@ -86,5 +100,5 @@ the original directory; the script always `cd`s there first.
   `osascript`). Many panes in one window get cramped; `restore` is intended for
   a post-reboot restore where the original sessions are gone. Restoring while
   the originals are still running means two `claude` processes attach to the
-  same session id.
+  same session id — pass `--fork` to avoid that.
 - Respects `CLAUDE_CONFIG_DIR` and `CLAUDE_SESSIONS_SNAPSHOT` overrides.

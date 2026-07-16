@@ -21,13 +21,24 @@
 # assigned to the N processes there. (On macOS/BSD `pgrep` excludes its own
 # ancestors, so the session you are typing in is auto-excluded.)
 #
+# LAYOUT & FRAGILITY NOTE
+# Claude Code's transcript layout is version-dependent: older versions write
+# <project>/<session-id>.jsonl, newer ones <project>/sessions/<session-id>.jsonl
+# (with subagent transcripts nested deeper — deliberately not matched here).
+# Both locations are checked. Anthropic documents the transcript entry format
+# as internal and subject to change on any release, so all parsing here
+# degrades gracefully (missing/unparseable fields become empty strings).
+#
 # SUBCOMMANDS
 #   snapshot [--all]      Capture running sessions to the snapshot file.
 #                         Default: sessions in the current repo's worktrees.
 #                         --all: every running Claude session on the machine.
-#   restore  [--dry-run]  Reopen + resume every session in the snapshot file.
+#   restore  [--dry-run] [--fork]
+#                         Reopen + resume every session in the snapshot file.
 #                         Uses iTerm2 if present, else Terminal.app.
 #                         --dry-run: just print the commands.
+#                         --fork: resume with --fork-session (new session ids;
+#                         safe when the originals may still be running).
 #   list     [--repo|--here|--all]   Live table (read-only), no snapshot.
 #   print    [--repo|--here|--all]   Live `cd ... && claude --resume ...` lines.
 #
@@ -51,6 +62,7 @@ PROJECTS_DIR="$CLAUDE_DIR/projects"
 CMD=""
 FILTER_MODE="repo"   # repo | here | all   (default repo for snapshot/list/print)
 DRY_RUN=0
+FORK=0
 
 for arg in "$@"; do
   case "$arg" in
@@ -59,6 +71,7 @@ for arg in "$@"; do
     --repo)    FILTER_MODE="repo" ;;
     --here)    FILTER_MODE="here" ;;
     --dry-run) DRY_RUN=1 ;;
+    --fork)    FORK=1 ;;
     -h|--help)
       sed -n '2,/^set -u/p' "$0" | sed 's/^# \{0,1\}//; /^set -u/d'
       exit 0 ;;
@@ -66,7 +79,7 @@ for arg in "$@"; do
   esac
 done
 
-[ -z "$CMD" ] && { echo "Usage: claude-sessions.sh {snapshot|restore|list|print} [--repo|--here|--all] [--dry-run]" >&2; exit 2; }
+[ -z "$CMD" ] && { echo "Usage: claude-sessions.sh {snapshot|restore|list|print} [--repo|--here|--all] [--dry-run] [--fork]" >&2; exit 2; }
 
 # --- Resolve the canonical snapshot file path -------------------------------
 resolve_snapshot_path() {
@@ -126,7 +139,9 @@ collect_running() {
     local mangled projdir file sid branch summary
     mangled=$(printf '%s' "$cwd" | sed 's/[^a-zA-Z0-9]/-/g')
     projdir="$PROJECTS_DIR/$mangled"
-    file=$(ls -t "$projdir"/*.jsonl 2>/dev/null | sed -n "${n}p")
+    # Layout varies by Claude Code version: transcripts live either directly in
+    # the project dir or under a sessions/ subdir. Check both, newest first.
+    file=$(ls -t "$projdir"/*.jsonl "$projdir"/sessions/*.jsonl 2>/dev/null | sed -n "${n}p")
     [ -z "$file" ] && continue
     sid=$(basename "$file" .jsonl)
     branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)
@@ -223,11 +238,9 @@ case "$CMD" in
     printf '%-7s  %-34s  %-36s  %-28s  %s\n' \
       "-------" "----------------------------------" \
       "------------------------------------" "----------------------------" "-------"
-    found=0
     collect_running | while IFS='|' read -r pid cwd sid branch summary; do
       short_cwd=$(printf '%s' "$cwd" | sed "s#^$HOME#~#")
       printf '%-7s  %-34s  %-36s  %-28s  %s\n' "$pid" "$short_cwd" "$sid" "$branch" "$summary"
-      found=1
     done
     ;;
 
@@ -244,6 +257,9 @@ case "$CMD" in
       exit 0
     fi
     mkdir -p "$(dirname "$SNAPSHOT_FILE")"
+    # Keep one generation of backup so a scoped snapshot can't silently
+    # clobber an earlier (e.g. --all) snapshot beyond recovery.
+    [ -f "$SNAPSHOT_FILE" ] && cp "$SNAPSHOT_FILE" "$SNAPSHOT_FILE.prev"
     printf '%s\n' "$rows" | SCOPE="$FILTER_MODE" python3 -c '
 import sys, json, os, datetime
 sessions = []
@@ -271,6 +287,7 @@ print(json.dumps(doc, indent=2))
 ' > "$SNAPSHOT_FILE"
     n=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["count"])' "$SNAPSHOT_FILE" 2>/dev/null)
     echo "Wrote $n session(s) (scope=$FILTER_MODE) to $SNAPSHOT_FILE"
+    [ -f "$SNAPSHOT_FILE.prev" ] && echo "Previous snapshot kept at $SNAPSHOT_FILE.prev"
     ;;
 
   restore)
@@ -302,7 +319,11 @@ for s in doc.get("sessions", []):
         continue
     sys.stdout.write("%s\t%s\n" % (cwd, sid))
 ' "$SNAPSHOT_FILE" | while IFS="$(printf '\t')" read -r cwd sid; do
-      printf 'cd %s && claude --resume %s\0' "$(printf '%q' "$cwd")" "$sid"
+      if [ "$FORK" = "1" ]; then
+        printf 'cd %s && claude --resume %s --fork-session\0' "$(printf '%q' "$cwd")" "$sid"
+      else
+        printf 'cd %s && claude --resume %s\0' "$(printf '%q' "$cwd")" "$sid"
+      fi
     done > "$CMDFILE"
 
     if [ ! -s "$CMDFILE" ]; then

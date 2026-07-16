@@ -17,6 +17,12 @@
 #   1D. Coverage gaps       — packages with ≥5 source files and no AGENTS.md   (minor)
 #   1E. Line count drift    — documented ~N lines vs actual, >30% and >50 off  (moderate)
 #
+# Missing references are additionally classified with git history (the DOCER
+# refinement): if the referenced file existed at the doc's last-modified
+# commit, the reference "went stale" (code moved on); if it never existed
+# there, it is likely an authoring error. Classification is best-effort and
+# skipped outside git repos.
+#
 # Output:
 #   Human-readable summary to stdout.
 #   Machine-readable JSON to /tmp/agent-docs-freshness.json.
@@ -24,6 +30,12 @@
 # Exit codes:
 #   0 — No critical issues found
 #   1 — Critical issues detected
+#
+# CI usage: the exit code makes this directly usable as a PR gate (e.g. a
+# workflow step running this script on the changed scope). Drift research
+# shows broken doc references sit unnoticed for years when checking is
+# manual-only; wiring the structural check into CI catches them at change
+# time. The LLM-driven refresh remains manual.
 #
 # Compatible with bash 3.2+ (macOS default).
 
@@ -91,6 +103,41 @@ file_exists_in_index() {
   fi
 }
 
+# ref_in_tree <ref> <tree_file> — does the reference match a path listed in a
+# git ls-tree snapshot? Same matching semantics as file_exists_in_index.
+ref_in_tree() {
+  local ref="$1" tree_file="$2"
+  [ -s "$tree_file" ] || return 1
+  if [[ "$ref" == */* ]]; then
+    grep -qF "$ref" "$tree_file" 2>/dev/null
+  else
+    grep -qF "/$ref" "$tree_file" 2>/dev/null || grep -qx "$ref" "$tree_file" 2>/dev/null
+  fi
+}
+
+# doc_tree_snapshot <doc_rel> <out_file> — write the repo file listing as of
+# the doc's last-modified commit to out_file (empty file = unavailable).
+doc_tree_snapshot() {
+  local doc_rel="$1" out_file="$2" doc_commit
+  : > "$out_file"
+  doc_commit=$(git -C "$REPO_ROOT" log -1 --format=%H -- "$doc_rel" 2>/dev/null)
+  [ -n "$doc_commit" ] || return 0
+  git -C "$REPO_ROOT" ls-tree -r --name-only "$doc_commit" > "$out_file" 2>/dev/null || : > "$out_file"
+}
+
+# classify_missing <ref> <tree_file> — echo a classification suffix for a
+# missing reference, using the doc's last-modified tree snapshot.
+classify_missing() {
+  local ref="$1" tree_file="$2"
+  if [ ! -s "$tree_file" ]; then
+    echo ""
+  elif ref_in_tree "$ref" "$tree_file"; then
+    echo " [went stale: existed when the doc was last edited]"
+  else
+    echo " [authoring error: did not exist even when the doc was last edited]"
+  fi
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Find agent docs
 # ─────────────────────────────────────────────────────────────────────────────
@@ -120,6 +167,9 @@ echo ""
 check_file_refs() {
   local doc="$1"
   local doc_rel="${doc#$REPO_ROOT/}"
+  local tree_file
+  tree_file=$(mktemp)
+  doc_tree_snapshot "$doc_rel" "$tree_file"
 
   grep -noE '`[A-Za-z0-9_./-]+\.('"$REF_EXT"')`' "$doc" 2>/dev/null | while IFS=: read -r line_num match; do
     local ref="${match//\`/}"
@@ -133,9 +183,10 @@ check_file_refs() {
 
     if ! file_exists_in_index "$ref"; then
       emit_issue "critical" "missing_file_reference" "$doc_rel" "$line_num" \
-        "References \`$ref\` which does not exist" "$ref"
+        "References \`$ref\` which does not exist$(classify_missing "$ref" "$tree_file")" "$ref"
     fi
   done
+  rm -f "$tree_file"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -167,6 +218,9 @@ check_build_targets() {
 check_key_files() {
   local doc="$1"
   local doc_rel="${doc#$REPO_ROOT/}"
+  local tree_file
+  tree_file=$(mktemp)
+  doc_tree_snapshot "$doc_rel" "$tree_file"
 
   grep -nE '^\|.*`[A-Za-z0-9_.-]+\.('"$SRC_EXT"')`' "$doc" 2>/dev/null | while IFS=: read -r line_num content; do
     local filename
@@ -175,9 +229,10 @@ check_key_files() {
 
     if ! file_exists_in_index "$filename"; then
       emit_issue "critical" "missing_key_file" "$doc_rel" "$line_num" \
-        "Key Files references \`$filename\` — not found" "$filename"
+        "Key Files references \`$filename\` — not found$(classify_missing "$filename" "$tree_file")" "$filename"
     fi
   done
+  rm -f "$tree_file"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
