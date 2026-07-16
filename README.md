@@ -78,8 +78,8 @@ with a `SKILL.md` entry point plus supporting files — so harnesses that speak
 the standard load them directly, and everything else takes a one-line pointer.
 
 ```bash
-git clone https://github.com/<you>/agent-skills.git ~/agent-skills
-# or vendor it: git submodule add <url> vendor/agent-skills
+git clone https://github.com/SteveVitali/agent-skills.git ~/agent-skills
+# or vendor it: git submodule add https://github.com/SteveVitali/agent-skills.git vendor/agent-skills
 ```
 
 **Claude Code (or any Agent Skills-compatible harness)** — symlink the skills
