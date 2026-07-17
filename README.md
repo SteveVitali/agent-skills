@@ -19,7 +19,7 @@ it describes.
   agent-engineering literature
   ([rationale](skills/implement-spec/README.md)).
 
-## The flagship: `implement-spec`
+## The flagship: [`implement-spec`](skills/implement-spec/SKILL.md)
 
 Most agents can write plausible code from a spec. What they don't do reliably
 is everything around that — hold the plan across a long horizon, test what
