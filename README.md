@@ -2,8 +2,10 @@
 
 Rigorous engineering process for AI coding agents, packaged as portable
 [Agent Skills](https://agentskills.io): implement a spec end to end to a
-verified PR, review a branch with independent judgment, and keep AGENTS.md
-docs converged with the code they describe.
+verified PR, review code with independent judgment — your own branch, or
+anyone's PR — work through review feedback like a professional author, and
+keep documentation (agent-facing and human-facing) converged with the code
+it describes.
 
 - **Harness-agnostic** — standard `SKILL.md` directories. Claude Code, Codex,
   Cursor, Gemini CLI, GitHub Copilot, and a growing list of clients load them
@@ -46,30 +48,62 @@ The full design rationale, with the literature behind each phase, is in
 
 ## The skills around it
 
-Two more skills back `implement-spec` and stand alone:
+Five more skills back `implement-spec` and stand alone:
 
-### [`self-review`](skills/self-review/SKILL.md)
+| Skill | Purpose |
+|---|---|
+| [`self-review`](skills/self-review/SKILL.md) | Two-pass review of your own branch, pre-PR: mechanical verification, then independence-preserving design critique |
+| [`review-pr`](skills/review-pr/SKILL.md) | Review someone else's PR: CI/verification grounding, focused design + security passes, calibrated severities, high-precision inline comments |
+| [`address-pr-comments`](skills/address-pr-comments/SKILL.md) | Work through review feedback on your PR: triage every thread, fix or push back with evidence, reply with commit links |
+| [`agent-docs`](skills/agent-docs/SKILL.md) | Bootstrap or refresh the AGENTS.md hierarchy — the agent-facing knowledge layer |
+| [`refresh-repo-docs`](skills/refresh-repo-docs/SKILL.md) | Audit and sync human-facing docs (README, docs/, examples) against the code |
 
-Two-pass review of the current branch — and `implement-spec`'s review phase.
-Pass 1 is mechanical: auto-discovered build/test/lint (via
-[`verify.sh`](skills/self-review/scripts/verify.sh), which infers the
-toolchain when the repo doesn't declare one) plus binary
-[checklists](skills/self-review/checklists/general.md). Pass 2 is design
-critique under independence rules — fresh context where the harness supports
-subagents, evidence-from-disk discipline where it doesn't — with a
-demonstrability bar for every flag raised.
+### The review suite
 
-### [`agent-docs`](skills/agent-docs/SKILL.md)
+Three seats at the same table, sharing one epistemology — **every flag must
+be demonstrable, and precision beats recall** (false positives are how
+reviewers lose the room):
 
-Creates and maintains the knowledge layer the other skills run on: an
-AGENTS.md-standard doc hierarchy an agent can trust cold. One workflow, two
-modes — `bootstrap` generates docs from scratch (reconnaissance → gotcha
-mining → generation), `refresh` detects and fixes drift. The mode is
-auto-selected by a deterministic, CI-gateable
-[drift detector](skills/agent-docs/scripts/check-agent-docs-freshness.sh)
-that classifies broken references as *went stale* vs *authoring error* using
-git history. Both modes share the
-[Doc Authoring Guidelines](skills/agent-docs/guidelines.md).
+- [`self-review`](skills/self-review/SKILL.md) is the author pre-PR: Pass 1
+  runs auto-discovered build/test/lint (via
+  [`verify.sh`](skills/self-review/scripts/verify.sh), which infers the
+  toolchain when the repo doesn't declare one) plus binary
+  [checklists](skills/self-review/checklists/general.md); Pass 2 is design
+  critique under independence rules — fresh context where the harness
+  supports subagents, evidence-from-disk discipline where it doesn't. Also
+  `implement-spec`'s review phase.
+- [`review-pr`](skills/review-pr/SKILL.md) is the reviewer's seat: grounded
+  in CI and (optionally) local verification, then separate focused passes
+  for correctness, design, security, and scope; findings gated by
+  demonstrability → confidence → novelty → materiality, labeled
+  `blocking`/`important`/`nit`/`question`, capped to prevent alert fatigue,
+  posted with suggestion blocks. It informs — approval stays human.
+- [`address-pr-comments`](skills/address-pr-comments/SKILL.md) is the author
+  answering: every unresolved thread gets a fix, a commit link, a reasoned
+  push-back, an answer, or a scoped follow-up — never silence, never
+  sycophancy, never a mid-review force-push.
+
+### The docs pair
+
+Same convergence philosophy, two corpora with different consumers and
+quality bars — each with a deterministic, CI-gateable drift detector in
+front of the LLM work:
+
+- [`agent-docs`](skills/agent-docs/SKILL.md) owns the agent-facing knowledge
+  layer (AGENTS.md hierarchy) the other skills run on. Two modes —
+  `bootstrap` (reconnaissance → gotcha mining → generation) and `refresh`
+  (drift triage → surgical fixes) — auto-selected by a
+  [detector](skills/agent-docs/scripts/check-agent-docs-freshness.sh) that
+  classifies broken references as *went stale* vs *authoring error* using
+  git history. Owns the shared
+  [Doc Authoring Guidelines](skills/agent-docs/guidelines.md).
+- [`refresh-repo-docs`](skills/refresh-repo-docs/SKILL.md) owns what humans
+  read: README, `docs/`, CHANGELOG, guides, examples. Its
+  [detector](skills/refresh-repo-docs/scripts/check-repo-docs-freshness.sh)
+  flags broken references and docs older than the code they cite; the audit
+  is scoped by evidence (flagged docs, not "read the whole repo"), findings
+  are classed stale/cruft/gap/mode-drift with Diátaxis as the per-doc
+  quality lens, and no claim is written unverified.
 
 ## Install
 
@@ -94,7 +128,9 @@ workflow or rule pointing at the skill file is enough — *"Read and follow
 
 Each skill declares its inputs in `SKILL.md` frontmatter; state them in
 natural language ("implement docs/spec.md, skip the ledger, base off main").
-The only system requirements are `git`, `bash` 3.2+, and standard Unix tools.
+System requirements: `git`, `bash` 3.2+, and standard Unix tools; the PR
+skills (`review-pr`, `address-pr-comments`) additionally need an
+authenticated [GitHub CLI](https://cli.github.com) (`gh`).
 
 ## Repo layout
 

@@ -7,7 +7,7 @@
     {
       "name": "agent-skills",
       "source": "./",
-      "description": "Reusable, research-grounded skills for AI coding agents: implement-spec, self-review, agent-docs",
+      "description": "Rigorous engineering process for AI coding agents: implement-spec, self-review, review-pr, address-pr-comments, agent-docs, refresh-repo-docs",
       "version": "0.1.0",
       "author": {
         "name": "Steve Vitali"
