@@ -27,8 +27,12 @@ The resolution is a fact about contexts, not a trick:
 
 This yields a three-role separation: **state on disk** (the ledger), **cognition in fresh disposable contexts**
 (each ticket, the capstone), **sequencing in a dumb loop** (`scripts/drive-build.sh`, or a harness's subagent
-dispatch, or a human). The orchestrator-context problem doesn't get *managed* — it gets *designed out*, because
-there is no long-lived orchestrator context to rot. This is Anthropic's own long-running-agent architecture
+dispatch, or a human). On the **program-as-orchestrator** path (the deterministic `drive-build.sh` loop, the
+recommended default) the orchestrator-context problem is *designed out*, not managed: the loop holds no LLM
+context, so there is nothing to rot. On the **agent-as-orchestrator** fallback (a single session dispatching
+subagents where no headless CLI exists) it is instead *minimized and bounded* — the session externalizes all
+state to the ledger and is re-spawnable from it, so its context grows only by compact per-ticket summaries and
+can be restarted before it degrades. Either way this is Anthropic's own long-running-agent architecture
 (externalized state + one-feature-at-a-time fresh sessions) with the sequencing made explicit.
 
 ## 2. The durable ledger is the linchpin
@@ -143,9 +147,9 @@ so a chain that no one ever ran composed does not ship. It is also where the sea
 - Anthropic — *Effective harnesses for long-running agents* (2025) — https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents
 - Anthropic — *Effective context engineering for AI agents* (2025) — https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents
 - Anthropic — *How we built our multi-agent research system* (2025) — https://www.anthropic.com/engineering/multi-agent-research-system
-- Anthropic — *Building effective agents* (2025) — https://www.anthropic.com/engineering/building-effective-agents
+- Anthropic — *Building effective agents* (2024) — https://www.anthropic.com/engineering/building-effective-agents
 - Anthropic — *Memory and context management* (Claude Developer Platform docs, 2025) — https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool
-- Cognition — *Don't Build Multi-Agents* (2025) — https://cognition.ai/blog/dont-build-multi-agents
+- Cognition (Walden Yan) — *Don't Build Multi-Agents* (2025) — https://cognition.com/blog/dont-build-multi-agents
 - Manus — *Context Engineering for AI Agents: Lessons from Building Manus* (2025) — https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus
 - LangGraph — *Human-in-the-loop / interrupts* — https://docs.langchain.com/oss/python/langgraph/interrupts
 - OpenAI — *Agents SDK: human-in-the-loop* — https://openai.github.io/openai-agents-js/guides/human-in-the-loop/

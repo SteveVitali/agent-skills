@@ -79,7 +79,8 @@ is still the per-ticket worker, run once per ticket in a fresh context:
   ([`drive-build.sh`](skills/orchestrate-build/scripts/drive-build.sh) that
   discovers `claude -p` / `goose run` / `codex exec` / `gemini -p`) that holds
   no state and dispatches each ticket to a *fresh* context — so nothing
-  accumulates context across the build and there is no orchestrator to rot.
+  accumulates context across the build and there is no long-lived agent
+  context to rot.
   State lives in the ledger; the human pauses and intervenes at ticket
   boundaries by editing it. Degrades to a subagent-per-ticket or a manual
   fresh-session floor where a harness offers less; the

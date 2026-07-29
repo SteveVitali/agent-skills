@@ -35,7 +35,7 @@ the advertised window and is driven by more than raw token count:
   length; distractors compound.
 - **NoLiMa (ICML 2025)**: at 32K tokens, 11 of 13 models fall below half their sub-1K baseline.
 - **RULER (COLM 2024)**: "effective length" is routinely a fraction of the claimed window.
-- **Lost in the Middle (TACL 2023)**: a U-shaped curve — 20–30 point accuracy drops for mid-context material.
+- **Lost in the Middle (TACL 2024)**: a U-shaped curve — 20–30 point accuracy drops for mid-context material.
 - **Anthropic** frames the mechanism as an **"attention budget"** stretched thin by n² attention, and adopts the
   term "context rot" directly.
 
@@ -104,13 +104,13 @@ to the plan.
 
 ## References
 
-- Hong, Troynikov, Huber — *Context Rot: How Increasing Input Tokens Impacts LLM Performance*, Chroma (2025) — https://research.trychroma.com/context-rot
+- Hong, Troynikov, Huber — *Context Rot: How Increasing Input Tokens Impacts LLM Performance*, Chroma (2025) — https://www.trychroma.com/research/context-rot
 - Modarressi et al. — *NoLiMa: Long-Context Evaluation Beyond Literal Matching*, ICML 2025 — https://arxiv.org/abs/2502.05167
 - Hsieh et al. — *RULER: What's the Real Context Size of Your Long-Context Language Models?*, COLM 2024 — https://arxiv.org/abs/2404.06654
-- Liu et al. — *Lost in the Middle: How Language Models Use Long Contexts*, TACL 2023 — https://arxiv.org/abs/2307.03172
+- Liu et al. — *Lost in the Middle: How Language Models Use Long Contexts*, TACL vol. 12 (2024) — https://arxiv.org/abs/2307.03172
 - Anthropic — *Effective context engineering for AI agents* (2025) — https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents
 - Anthropic — *How we built our multi-agent research system* (2025) — https://www.anthropic.com/engineering/multi-agent-research-system
-- Cognition — *Don't Build Multi-Agents* (2025) — https://cognition.ai/blog/dont-build-multi-agents
+- Cognition (Walden Yan) — *Don't Build Multi-Agents* (2025) — https://cognition.com/blog/dont-build-multi-agents
 - Panickssery, Bowman, Feng — *LLM Evaluators Recognize and Favor Their Own Generations*, NeurIPS 2024 — https://arxiv.org/abs/2404.13076
-- Wataoka, Takahashi, Ri — *Self-Preference Bias in LLM-as-a-Judge* (2024) — https://arxiv.org/abs/2410.21819
+- Wataoka, Takahashi, Ri — *Self-Preference Bias in LLM-as-a-Judge*, NeurIPS 2024 Safe GenAI Workshop — https://arxiv.org/abs/2410.21819
 - GitHub — *Spec Kit* — https://github.com/github/spec-kit · AWS — *Kiro* — https://kiro.dev/docs/specs/
