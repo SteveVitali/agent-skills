@@ -48,15 +48,43 @@ The full design rationale, with the literature behind each phase, is in
 
 ## The skills around it
 
-Five more skills back `implement-spec` and stand alone:
+Seven more skills stand alongside it — two scale it across sessions, the rest
+review, answer, and document:
 
 | Skill | Purpose |
 |---|---|
+| [`decompose-spec`](skills/decompose-spec/SKILL.md) | Split one large spec into the fewest self-contained tickets that each fit a single fresh context, and seed a durable build ledger — the planning half of a multi-session build |
+| [`orchestrate-build`](skills/orchestrate-build/SKILL.md) | Drive that ledger to completion: run each ticket through `implement-spec` in a fresh context, report progress, pause for intervention, finish with a whole-build capstone — the execution half |
 | [`self-review`](skills/self-review/SKILL.md) | Two-pass review of your own branch, pre-PR: mechanical verification, then independence-preserving design critique |
 | [`review-pr`](skills/review-pr/SKILL.md) | Review someone else's PR: CI/verification grounding, focused design + security passes, calibrated severities, high-precision inline comments |
 | [`address-pr-comments`](skills/address-pr-comments/SKILL.md) | Work through review feedback on your PR: triage every thread, fix or push back with evidence, reply with commit links |
 | [`agent-docs`](skills/agent-docs/SKILL.md) | Bootstrap or refresh the AGENTS.md hierarchy — the agent-facing knowledge layer |
 | [`refresh-repo-docs`](skills/refresh-repo-docs/SKILL.md) | Audit and sync human-facing docs (README, docs/, examples) against the code |
+
+### The multi-session build
+
+When a spec is too large for one focused run, `decompose-spec` and
+`orchestrate-build` turn it into a resumable chain of PRs — `implement-spec`
+is still the per-ticket worker, run once per ticket in a fresh context:
+
+- [`decompose-spec`](skills/decompose-spec/SKILL.md) is the planner, and the
+  quality ceiling of the whole build: it partitions the spec to a precise
+  objective — *the fewest tickets such that each fits one fresh context with
+  rigor headroom and no cut severs a shared implicit decision* — then reviews
+  its own split in a fresh context and seeds the build ledger. The two bounds
+  (context rot above, fragmented decisions below) trace to the
+  [rationale](skills/decompose-spec/README.md).
+- [`orchestrate-build`](skills/orchestrate-build/SKILL.md) is the driver. Its
+  key move: sequencing is deterministic code — a portable loop
+  ([`drive-build.sh`](skills/orchestrate-build/scripts/drive-build.sh) that
+  discovers `claude -p` / `goose run` / `codex exec` / `gemini -p`) that holds
+  no state and dispatches each ticket to a *fresh* context — so nothing
+  accumulates context across the build and there is no orchestrator to rot.
+  State lives in the ledger; the human pauses and intervenes at ticket
+  boundaries by editing it. Degrades to a subagent-per-ticket or a manual
+  fresh-session floor where a harness offers less; the
+  [rationale](skills/orchestrate-build/README.md) covers why it stays
+  harness-agnostic.
 
 ### The review suite
 
