@@ -164,7 +164,7 @@ authenticated [GitHub CLI](https://cli.github.com) (`gh`).
 ## Repo layout
 
 ```
-.claude-plugin/              # plugin + marketplace manifests (Claude Code)
+.claude-plugin/                # plugin + marketplace manifests (Claude Code)
 skills/<skill-name>/
 ├── SKILL.md             # entry point (Agent Skills format: frontmatter + steps)
 ├── README.md            # design rationale (where it exists)
