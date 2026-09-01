@@ -130,8 +130,9 @@ root in its prompt for exactly this reason — a repo-relative `skills/…` path
 - **spec**: *"Implement ticket `T#` of the `<build_name>` build. Your CONTRACT is the per-ticket contract for
   `T#` in the build ledger (`<ledger path>`) plus its cited §§. Honor the cross-cutting invariants: `<list>`.
   Follow the repo's AGENTS.md conventions. Scope strictly to this ticket — do nothing on the out-of-scope list."*
-  (When the ledger's PHASE PLAN points at per-ticket contract files — a `tickets_dir` layout from
-  `decompose-spec` — pass that ticket file's path as the worker's **spec** instead; the file *is* the contract.)
+  (Where the ledger's PHASE PLAN points at per-ticket contract files — decompose-spec's default projection —
+  pass that ticket file's path as the worker's **spec** instead; the file *is* the contract. Older ledgers may
+  embed contracts inline.)
 - **worktree**: the ledger's `buildWorktree`.
 - **base_branch**: the ticket's `forks-from` (the `chainTip` for chained tickets).
 - **branch_name**: the ticket's `Branch`.
