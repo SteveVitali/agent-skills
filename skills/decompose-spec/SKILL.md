@@ -1,7 +1,7 @@
 ---
 name: decompose-spec
 license: MIT
-description: "Turn one large spec into an optimally-partitioned, dependency-ordered ticket plan — the fewest self-contained tickets that each fit one fresh-context implementation run — and seed a durable build ledger. The planning half of a multi-session build; pairs with orchestrate-build."
+description: "Turn one large spec into an optimally-partitioned, dependency-ordered ticket plan — the fewest self-contained tickets that each fit one fresh-context implementation run — and seed a durable build ledger — with an optional per-ticket contract-file layout plus manifest runbook (tickets_dir) for hand-chained builds. The planning half of a multi-session build; pairs with orchestrate-build."
 inputs:
   - name: spec
     required: true
@@ -18,6 +18,9 @@ inputs:
   - name: ledger
     required: false
     description: "Default true. Write the seeded build ledger to the gitignored scratch dir. When false, output the plan to the operator without persisting (planning-only / dry run)."
+  - name: tickets_dir
+    required: false
+    description: "Directory for a per-ticket-file contract layout (e.g. 'docs/tickets'), for builds driven by hand-chained fresh sessions as much as by orchestrate-build. When set, Phase 3 writes one self-contained contract file per ticket plus a 00_MANIFEST.md runbook there (gitignored — derived build scaffolding regenerated from the spec, never committed), and the ledger's PHASE PLAN points at those files instead of embedding contracts. Unset (default): contracts live inside the ledger as before."
 ---
 
 # Decompose Spec
@@ -120,6 +123,12 @@ Rules for filling it:
   `--base` is that same branch so each PR diff is exactly one ticket.
 - **Mark out-of-chain rows** (different repo / deliberately independent): they do not advance `chainTip` and
   record their dependency as informational.
+- **Include non-code rows where the build has them, marked as such.** Two kinds: **human prerequisites**
+  (account registrations, outreach, procurement — work only the operator can do; listed so the chain never
+  silently blocks on them) and **milestone gates** (a hard synchronization barrier or a pre-registered
+  go/no-go — "the vertical-slice retrospective is committed before any later ticket starts", or an evaluation
+  criterion whose thresholds are recorded *before* the gated work begins). Neither is a ticket: they do not
+  advance `chainTip`, and an unmet gate is treated as `blockedOn`, never guessed past.
 - **Classify acceptance per ticket.** Is "done" **deterministic** (a unit/integration test, a byte-identity or
   behavioral check) or **empirical/agentic** (a repeat-scored metric on a benchmark set)? Agentic tickets need a
   benchmark fixture defined at SETUP — note it.
@@ -148,6 +157,19 @@ Keep the cross-cutting invariants and out-of-scope list from Phase 0 at the top 
 ticket's gap-analysis re-checks them. If the spec is so underspecified that contracts cannot be derived
 (no decomposition *and* no derivable design), that is design work, not decomposition: **stop and tell the
 operator the spec needs a design pass first** — do not invent a design.
+
+**When `tickets_dir` is set, each contract is its own file** — `T<nn>__<slug>.md` in DAG order (zero-padded so
+lexical order is chain order), or `P<phase>.<k>__<slug>.md` when the spec has named phases — containing exactly
+the contract above plus a small header (sequence, phase, `forks-from` / PR-base, depends-on, and the literal
+run line `implement-spec spec=<tickets_dir>/<file>`), so a fresh worker loads **one small file** and nothing
+else. Two disciplines make the layout safe:
+
+- **Cite, don't copy.** A ticket file *cites* the spec's sections and requirement IDs; it never restates the
+  design — a restated design forks the spec, and the drift arrives with the first amendment. To change a
+  requirement: amend the spec first, then the affected ticket's Load/AC lines.
+- **Stamp requirement IDs.** Where the spec carries stable requirement IDs, each ticket lists the IDs it
+  satisfies — to be stamped in its PR — and the Phase-4 coverage check runs on IDs: every in-scope ID maps to
+  exactly one ticket, or to an explicit deferred table naming its target phase.
 
 ---
 
@@ -219,6 +241,19 @@ updatedAt:       <date>
 
 ### `PHASE LOG` — append-only, newest last. Seed one "ledger created" entry noting the spec, the ticket count, and that the plan is revisable at run time.
 
+### The manifest (`tickets_dir` layout only)
+
+When `tickets_dir` is set, also write `<tickets_dir>/00_MANIFEST.md` — the human-facing runbook that makes the
+ticket directory self-driving without the ledger: **how to build** (the fresh-session chain: run the next file,
+stay on the branch the previous ticket left checked out so the PRs stack, merge bottom-up at the end); **the
+chain table** (one row per ticket file, with the non-code human-prerequisite and milestone-gate rows interleaved
+in order); **phase gates and special points** (barriers, external-dependency tickets that must never block the
+chain, ownership notes for logic several tickets consume); **the requirement-ID → ticket index**; and a
+**"spec amendments applied" log** (append one line whenever the canonical spec is amended and ticket Load/AC
+lines are updated to match). The ledger is still seeded (unless `ledger=false`) and remains the machine truth
+`orchestrate-build` parses; its PHASE PLAN rows point at the ticket files. Manifest and ticket files live in
+`tickets_dir`, gitignored.
+
 If `ledger=false`, skip the write and present the plan + all sections to the operator instead.
 
 ---
@@ -230,6 +265,13 @@ called out), any conscious tradeoffs from Phase 4, the ledger path, and the exac
 
 ```
 ▶ To build: run orchestrate-build with ledger=<path>  (it will SETUP, then drive each ticket via implement-spec).
+```
+
+With `tickets_dir` set, also print the manual floor — it needs no orchestrator at all:
+
+```
+▶ Or by hand: in a fresh session, run  implement-spec spec=<tickets_dir>/<first ticket file>
+  then, per <tickets_dir>/00_MANIFEST.md, chain the next file from the branch each ticket leaves checked out.
 ```
 
 Do not create worktrees, branches, or run anything — that is `orchestrate-build`'s job.

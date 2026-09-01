@@ -91,8 +91,31 @@ to the plan.
 | 3 | Author execute-grade contracts where missing | `implement-spec` needs a CONTRACT to diff against |
 | 4 | **Fresh-context adversarial split review** | Self-preference bias (§5) |
 | 5 | Seed the ledger — grep-friendly `CURRENT STATE`, PHASE PLAN, invariants, SETUP/CAPSTONE templates | Durable external state (see orchestrate-build README) |
+| 3+5 (`tickets_dir`) | Per-ticket contract files + `00_MANIFEST.md` runbook; cite-don't-copy; requirement-ID stamping; non-code rows | Two production builds hand-rolled it (§7) |
 
-## 7. Honest limitations
+## 7. The `tickets_dir` layout: per-ticket files + a manifest runbook
+
+Two production builds (a 46-ticket chain and a second large build) independently hand-rolled the same artifact
+layout when driving tickets through hand-chained fresh sessions rather than the automated loop: one contract
+file per ticket plus a `00_MANIFEST.md` runbook, gitignored beside the canonical spec. Twice-reinvented
+prompting is the definition of a missing affordance, so the skill now emits it natively (`tickets_dir`). The
+layout earns its place on four grounds:
+
+- **The per-ticket file is the §2 logic applied to the contract itself.** A fresh worker's working set should
+  start at one small file — not a scan of a monolithic ledger for its slice.
+- **Cite-don't-copy prevents spec forking.** A contract that restates the design diverges from the spec at the
+  first amendment; citing sections + requirement IDs keeps the spec the single source of truth, with a manifest
+  log recording each amendment applied.
+- **Requirement-ID stamping makes coverage checkable** — at plan time (every in-scope ID → exactly one ticket)
+  and at review time (the PR lists the IDs it satisfies).
+- **Real chains contain non-code work.** Human prerequisites (accounts, outreach) and pre-registered milestone
+  gates (a hard barrier, a go/no-go criterion) belong *in* the ordered plan — as marked non-ticket rows — or the
+  chain silently blocks on them.
+
+The ledger is still seeded and remains the machine truth for `orchestrate-build`; the manifest is the human
+truth for the manual floor. Same plan, two projections.
+
+## 8. Honest limitations
 
 - **The estimate is a heuristic.** "Fits one fresh context" is judged, not measured; the mitigation is
   `orchestrate-build`'s run-time **split-on-overflow** (a ticket that overflows is re-decomposed) and
