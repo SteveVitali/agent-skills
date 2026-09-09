@@ -1,0 +1,5 @@
+id,level,spec_section,class,verdict,evidence,owning_tickets,tests,adrs,routing,note
+# Template: docs/build/COVERAGE_MATRIX.csv (BM-TAIL-01). Written by the CAP.1 capstone ticket.
+# One row per spec requirement id. verdict ∈ MET | MET-DIFFERENTLY | PARTIAL | MISSING | AT-RISK-INTEGRATION.
+# level ∈ MUST | SHOULD | MAY | RATIONALE. evidence = >=1 path:line / test id / ADR id (never blank for MET/MET-DIFFERENTLY).
+# routing = the ticket that will close a non-MET row (or "accepted"). Delete these comment lines when instantiating.

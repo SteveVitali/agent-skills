@@ -15,12 +15,21 @@ inputs:
   - name: granularity
     required: false
     description: "A nudge on the factor/over-factor tradeoff: 'coarse' (fewer, larger tickets), 'balanced' (default), 'fine' (smaller tickets). Only shifts where inside the safe band the partition lands; it never overrides the hard ceiling or the shared-decision rule."
+  - name: mode
+    required: false
+    description: "'seed' (default): plan a fresh build and seed the layout. 'extend': add a re-planning round to an existing build — read the current ledger, DEFERRALS.md, research-ledger §Q and BACKLOG.csv, then append inserts/splits/rounds and (for a legacy ledger at CAPSTONE) the standard tail rows, without renaming history."
+  - name: tail
+    required: false
+    description: "The closeout tail appended when the chain has >1 implement-spec ticket: 'full' (default — CAP.1/CAP.2/CAP.3, GATE-ACCEPT, REC.1/REC.2/REC.3, DOC.1/DOC.2) or 'minimal' (CAP.1, CAP.3, DOC.1, DOC.2). 'none' is refused when N>1."
+  - name: sequence_prefix
+    required: false
+    description: "Default true. Name ticket files with the NN[a-z]?_<ID>__<slug>.md global-sequence prefix so lexical order is chain order. Historical/legacy filenames a manifest chain table already lists are never renamed."
   - name: ledger
     required: false
-    description: "Default true. Write the seeded build ledger to the gitignored scratch dir. When false, output the plan to the operator without persisting (planning-only / dry run)."
+    description: "Default true. Seed the build ledger. In COMMITTED mode (a docs/build/README.md marker, or tickets_dir under docs/) it is docs/build/LEDGER.md, committed. Otherwise it is the gitignored scratch ledger. When false, output the plan without persisting (planning-only / dry run)."
   - name: tickets_dir
     required: false
-    description: "Where to write the per-ticket contract files and the 00_MANIFEST.md runbook. Default: beside the ledger in the gitignored scratch dir ($SCRATCH/<build_name>-tickets/) — zero repo-tree footprint. Set a repo path (e.g. 'docs/tickets') to relocate them into the tree, browsable next to the canonical spec for a hand-chained build; a tree location must be gitignored (derived build scaffolding, regenerated from the spec, never committed) — add the ignore line if missing and say so. Ignored when ledger=false (a planning-only run writes nothing)."
+    description: "Where the per-ticket contracts + 00_MANIFEST.md go. In COMMITTED mode the default is docs/tickets (committed contract record, browsable beside the spec; build-memory init sets up docs/build, docs/adr too). In a repo that has NOT opted into committed build memory, the default stays the gitignored scratch dir ($SCRATCH/<build_name>-tickets/) — byte-for-byte the 0.1.x behaviour. Ignored when ledger=false."
 ---
 
 # Decompose Spec
@@ -92,6 +101,12 @@ For a large spec, this reading is itself broad: you MAY fan out **read-only** su
 is safe to parallelize; only *writes* must stay single-threaded). Each returns a compact map of its area's
 seams and dependencies.
 
+**In `mode=extend`** (a re-planning round on an existing build), also read the current build state before
+cutting: `docs/build/LEDGER.md` (what has landed, `chainTip`, `round`), `docs/tickets/DEFERRALS.md` (owed work
+that a new round may close), `docs/research-ledger.md` §Q (operator decisions), and `docs/build/BACKLOG.csv`
+(carried debt). The new round's tickets fork from the current `chainTip`; you append to the manifest's chain
+table and `## Plan extensions`, and never rename an existing ticket file (BM-COMPAT-05).
+
 ---
 
 ## Phase 1: Build the dependency + coupling map
@@ -123,12 +138,19 @@ Rules for filling it:
   `--base` is that same branch so each PR diff is exactly one ticket.
 - **Mark out-of-chain rows** (different repo / deliberately independent): they do not advance `chainTip` and
   record their dependency as informational.
-- **Include non-code rows where the build has them, marked as such.** Two kinds: **human prerequisites**
-  (account registrations, outreach, procurement — work only the operator can do; listed so the chain never
-  silently blocks on them) and **milestone gates** (a hard synchronization barrier or a pre-registered
-  go/no-go — "the vertical-slice retrospective is committed before any later ticket starts", or an evaluation
-  criterion whose thresholds are recorded *before* the gated work begins). Neither is a ticket: they do not
-  advance `chainTip`, and an unmet gate is treated as `blockedOn`, never guessed past.
+- **Include non-code rows where the build has them, marked as such.** Two kinds, each written as a **marker
+  file** in the same global sequence (BM-TICKET-05, from `build-memory`'s `templates/HUMAN.md` / `templates/GATE.md`):
+  **human prerequisites** (`NN[a-z]_HUMAN-H<k>__<slug>.md` — account registrations, outreach, procurement, work
+  only the operator can do; listed so the chain never silently blocks on them) and **milestone gates**
+  (`NN[a-z]_GATE-G<k>__<slug>.md` — a hard synchronization barrier or a pre-registered go/no-go, its thresholds
+  quoted verbatim from the spec and recorded *before* the gated work begins). Neither is an `implement-spec`
+  input: they do not advance `chainTip`. **A gate is a pause, not a block** — it is dispositioned by the operator
+  (recorded in the ledger's GATE DECISIONS + a `readouts/GATE-G<k>.md`) and never guessed past; a pending gate is
+  a `RETURN PASS` row, not a `blockedOn`.
+- **Emit skeleton tickets after a gate where the body cannot be written yet** (BM-TICKET-03): `Kind: skeleton`,
+  a `> Skeleton only` banner naming the gate, and only the header + `## Scope (one line)` + `## Spec §§` +
+  `## REQ coverage`. A skeleton carries **no run line** — the validator refuses to run one and `implement-spec`
+  stops if asked to.
 - **Classify acceptance per ticket.** Is "done" **deterministic** (a unit/integration test, a byte-identity or
   behavioral check) or **empirical/agentic** (a repeat-scored metric on a benchmark set)? Agentic tickets need a
   benchmark fixture defined at SETUP — note it.
@@ -158,11 +180,13 @@ ticket's gap-analysis re-checks them. If the spec is so underspecified that cont
 (no decomposition *and* no derivable design), that is design work, not decomposition: **stop and tell the
 operator the spec needs a design pass first** — do not invent a design.
 
-**Each contract is its own file** — written to the tickets directory (default: `$SCRATCH/<build_name>-tickets/` beside the ledger; `tickets_dir` relocates it into the tree) as `T<nn>__<slug>.md` in DAG order (zero-padded so
-lexical order is chain order), or `P<phase>.<k>__<slug>.md` when the spec has named phases — containing exactly
-the contract above plus a small header (sequence, phase, `forks-from` / PR-base, depends-on, and the literal
-run line `implement-spec spec=<tickets dir>/<file>`), so a fresh worker loads **one small file** and nothing
-else. Two disciplines make the layout safe:
+**Each contract is its own file**, from `build-memory`'s `templates/ticket.md` (BM-TICKET-01) — written to the
+tickets directory (committed mode: `docs/tickets`; otherwise the gitignored scratch dir) as
+`NN[a-z]?_<ID>__<slug>.md` when `sequence_prefix` is true (the global sequence, zero-padded so lexical order is
+chain order), else the legacy `T<nn>__<slug>.md` / `P<phase>.<k>__<slug>.md`. It carries the template's full
+header (sequence, phase, kind, `base_branch: current checkout`, depends-on, the literal `Run:` line, `Gate
+status`, `Live stage`) and body sections, ending with the universal phase-gate AC (BM-TICKET-02), so a fresh
+worker loads **one small file** and nothing else. Two disciplines make the layout safe:
 
 - **Cite, don't copy.** A ticket file *cites* the spec's sections and requirement IDs; it never restates the
   design — a restated design forks the spec, and the drift arrives with the first amendment. To change a
@@ -198,63 +222,59 @@ is revisable.
 
 ---
 
-## Phase 5: Seed the build ledger
+## Phase 5: Seed the build memory
 
-Write the durable ledger — the single source of truth that every later fresh context (worker or orchestrator)
-reads to get its bearings. Put it in the repo's canonical, **gitignored** scratch location:
+`build-memory` owns the layout; `decompose-spec` fills it. Everything below cites
+`skills/build-memory/layout.md` and does not restate the tree. If `ledger=false`, skip every write and present
+the plan + all sections to the operator instead.
 
-```bash
-SCRATCH="${AGENT_SCRATCH_DIR:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.agents/scratch}"
-mkdir -p "$SCRATCH"    # must be gitignored; never commit the ledger
-LEDGER="$SCRATCH/${build_name}-build-ledger.md"
-```
+**1. Initialise the layout.** Invoke the `build-memory` skill in `init` mode (idempotent — never overwrites an
+existing file). In **committed** mode this creates `docs/build/{README.md (with the marker), LEDGER.md,
+BUILD_INDEX.md, logs/.gitignore}`, `docs/adr/{README.md, _TEMPLATE.md}`, `docs/tickets/{_TEMPLATE.md,
+DEFERRALS.md}`, the `AGENTS.md` build-memory section and the `docs/README.md` rows. A repo that has **not** opted
+in stays in scratch mode — byte-for-byte the 0.1.x behaviour (a gitignored `${build_name}-build-ledger.md` and a
+scratch tickets dir); everything below still applies, minus the commit.
 
-Write these sections (this is the exact structure `orchestrate-build` and `drive-build.sh` parse):
+**2. Write the state-only ledger** (`docs/build/LEDGER.md`, from the template, BM-LEDGER-01/02). It holds
+**state only — the manifest is the plan.** The `CURRENT STATE` fenced block carries exactly the keyset in layout
+order (`projectStatus … round … updatedAt`); seed `projectStatus: NOT_STARTED`, `nextTicket: SETUP`,
+`manifest: docs/tickets/00_MANIFEST.md`, `canonicalSpec`, `memoryRoot`, `round: 1`. Below it: empty
+`OPEN FINDINGS`, `GATE DECISIONS`, `RETURN PASS` tables, and a `PHASE LOG` with one seed entry (spec, ticket
+count, "the plan is revisable at run time"). **No PHASE PLAN / SETUP / CAPSTONE sections** — those moved to the
+manifest (the plan) and to tail tickets.
 
-### `CURRENT STATE` — a grep-friendly `key: value` block, parsed first
-Keep it plain `key: value` lines (machine-readable by a shell loop, and models are less likely to rewrite a
-structured status block than prose):
-```
-projectStatus:   NOT_STARTED        # NOT_STARTED | IN_PROGRESS | BLOCKED | CAPSTONE | DONE
-nextTicket:      SETUP              # SETUP, then T1..Tn per the ordering, then CAPSTONE, then DONE
-lastCompleted:   (none)
-blockedOn:       (nothing)
-pauseRequested:  false              # the human sets true to halt the loop at the next ticket boundary
-canonicalSpec:   <path to the spec>
-dispatchTarget:  <subagent|headless|manual>
-buildWorktree:   (set at SETUP)
-buildBranchBase: (set at SETUP)
-pinnedBaseSha:   (set at SETUP)
-chainTip:        (set at SETUP; advances per completed chained ticket)
-benchmarkSet:    (id | PENDING_CREATE | N/A)
-autonomy:        (set by orchestrate-build)
-updatedAt:       <date>
-```
+**3. Write the per-ticket contracts** (Phase 3) and the manifest.
 
-### `PHASE PLAN` — the canonical ticket table from Phase 2 (do not reorder), with a legend defining `forks-from / PR-base` and marking out-of-chain rows, with each row pointing at its per-ticket contract file.
+**4. Write `docs/tickets/00_MANIFEST.md`** from the template (BM-MANIFEST-01), the human-facing runbook that
+makes the chain self-driving **without** the ledger: the three banners (committed contract record; cite-don't-copy
+with the spec amendment protocol; deferrals companion), a `companions:` line and an optional `req_id_pattern:`
+line, `## How to build` (the four rules + the run-line pattern), `## Human prerequisites`, `## The chain`
+(`| # | file | phase | kind | scope | gate |`, HUMAN/GATE marker and skeleton rows interleaved in order),
+`## Milestone gates`, `## Phase gates & ownership notes`, `## Cross-cutting invariants`, `## Out of scope`,
+`## Requirement-ID → ticket index`, `## Spec amendments applied`, `## Decomposition decisions` (incl. the Phase-4
+adversarial review record), `## Plan extensions`.
 
-### `CROSS-CUTTING INVARIANTS` and `OUT OF SCOPE` — from Phase 0, verbatim; every ticket and the capstone re-check these.
+**5. Append the tail** (BM-TAIL-01) when the chain has **more than one** implement-spec ticket: instantiate
+`build-memory`'s `templates/tail/` — `tail=full` (CAP.1, CAP.2, CAP.3, GATE-ACCEPT, REC.1, REC.2, REC.3, DOC.1,
+DOC.2) or `tail=minimal` (CAP.1, CAP.3, DOC.1, DOC.2) — filling the placeholders (`{{build_name}}`, `{{spec_path}}`,
+`{{req_id_pattern}}`, `{{ticket_count}}`, `{{last_ticket}}`). Each becomes an ordinary chain row (`kind` capstone
+| reconcile | docs). `tail=none` is refused when N > 1. The capstone is tickets — there is no CAPSTONE ledger
+section.
 
-### `SETUP checklist` — the one-time bootstrap `orchestrate-build` runs: create the dedicated worktree off the pinned base, baseline-green check, stand up the benchmark fixture if any ticket is agentic (with its safe-creation recipe and pollution hazard called out), then set `chainTip`, `nextTicket=T1`, `projectStatus=IN_PROGRESS`.
+**6. Persist the hand-off** when this run was invoked from a `docs/decomposition-prompt.md` — keep that file as
+the frozen record of the exact invocation and binding constraints.
 
-### `CAPSTONE checklist` — the one-time whole-chain closeout after the last ticket: a fresh whole-chain gap analysis vs the *entire* spec → close real gaps / consciously accept sound deviations → a composed end-to-end verification exercising the whole build as one unit. (Templated here; `orchestrate-build` runs it.)
+**7. Validate.** Run `bash skills/build-memory/scripts/check-build-memory.sh .` — it must exit 0 (layout, ticket
+grammar + unique sequence, manifest ↔ files, backward deps, skeletons w/o run lines, DEFERRALS, ADR index, ledger
+keys, REQ coverage). A failure is a real block: fix the seed, don't hand off a red layout. In committed mode,
+this is the state `orchestrate-build` commits at SETUP.
 
-### `PHASE LOG` — append-only, newest last. Seed one "ledger created" entry noting the spec, the ticket count, and that the plan is revisable at run time.
-
-### The tickets directory and its manifest
-
-Alongside the ledger, write the per-ticket contract files (Phase 3) and `<tickets dir>/00_MANIFEST.md` — the human-facing runbook that makes the
-ticket directory self-driving without the ledger: **how to build** (the fresh-session chain: run the next file,
-stay on the branch the previous ticket left checked out so the PRs stack, merge bottom-up at the end); **the
-chain table** (one row per ticket file, with the non-code human-prerequisite and milestone-gate rows interleaved
-in order); **phase gates and special points** (barriers, external-dependency tickets that must never block the
-chain, ownership notes for logic several tickets consume); **the requirement-ID → ticket index**; and a
-**"spec amendments applied" log** (append one line whenever the canonical spec is amended and ticket Load/AC
-lines are updated to match). The ledger remains the machine truth `orchestrate-build` parses; its PHASE PLAN rows point at the ticket
-files. Default location is the scratch dir; when `tickets_dir` relocates the directory into the repo tree, it
-must be gitignored — add the ignore line if missing and say so.
-
-If `ledger=false`, skip every write — ledger, ticket files, and manifest — and present the plan + all sections to the operator instead.
+### The spec amendment protocol
+Ticket files **cite** the spec; they never copy the design (a restated design forks the spec, and the drift
+arrives with the first amendment). To change a requirement: **amend the source spec first**; bump its
+version/delta; requirement ids are **append-only**; add a `## Spec amendments applied` manifest line (date,
+section, before/after or pointer, approver); write an **ADR** when a design decision changes; then update the
+affected tickets' Load/AC lines (executed contracts get an appended `> Amended <date>:` note, never a rewrite).
 
 ---
 
@@ -270,15 +290,18 @@ called out), any conscious tradeoffs from Phase 4, the ledger path, and the exac
 Also print the manual floor — it needs no orchestrator at all:
 
 ```
-▶ Or by hand: in a fresh session, run  implement-spec spec=<tickets dir>/<first ticket file>
-  then, per <tickets dir>/00_MANIFEST.md, chain the next file from the branch each ticket leaves checked out.
+▶ Or by hand: in a fresh session, run  implement-spec spec=docs/tickets/<first ticket file>
+  then, per docs/tickets/00_MANIFEST.md, chain the next file from the branch each ticket leaves checked out.
+  Each worker closes its own ticket in docs/build/LEDGER.md (committed mode), so the chain advances with no orchestrator.
 ```
 
-Do not create worktrees, branches, or run anything — that is `orchestrate-build`'s job.
+Report the validator result (`check-build-memory.sh` exit 0) as part of the hand-off. Do not create worktrees,
+branches, or run anything — that is `orchestrate-build`'s job.
 
 ## What this does NOT do
 
-- **No implementation, no branches, no worktrees, no execution** — pure planning + ledger seeding.
+- **No implementation, no branches, no worktrees, no execution** — pure planning + build-memory seeding
+  (the manifest, the state-only ledger, the tickets, the tail; it writes docs, never code or branches).
 - **No design authoring.** It decomposes an authoritative spec; it does not invent a missing design (that's a
   hard stop in Phase 3).
 - **No runtime parameters** (worktree path, pinned base, autonomy) — those are resolved by `orchestrate-build` at

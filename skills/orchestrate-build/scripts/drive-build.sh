@@ -11,10 +11,13 @@
 # non-interactively and exits.
 #
 # Usage:
-#   drive-build.sh --ledger <path> [--yolo] [--agent-cmd "<cmd>"] [--worktree <path>]
-#                  [--log-dir <path>] [--max-iters <n>]
+#   drive-build.sh --ledger <path> [--skill <name>] [--yolo] [--agent-cmd "<cmd>"]
+#                  [--worktree <path>] [--log-dir <path>] [--max-iters <n>]
 #
 #   --ledger      Path to the seeded build ledger (required).
+#   --skill       The driving skill each fresh unit follows (default: orchestrate-build). The
+#                 prompt names this skill; e.g. --skill synthesize-spec drives docs/research-ledger.md
+#                 (whose next-unit pointer is `nextUnit`) the same way. Resolved under the skills root.
 #   --yolo        Enable UNATTENDED WRITES by appending the discovered CLI's autonomy flag. Off by default:
 #                 without it, headless CLIs do not prompt — they silently DENY edits/commands, so a ticket makes
 #                 no changes and the loop stops at the no-progress guard. Per-CLI mapping (auto-discovery only):
@@ -30,17 +33,22 @@
 #   --log-dir     Where per-unit agent output is captured. Default: <ledger-dir>/drive-build-logs/.
 #   --max-iters   Safety cap on iterations (default 100). Re-run to continue past it.
 #
-# Exit codes: 0 = DONE or cleanly paused; 2 = BLOCKED / no-progress (human needed); 3 = iteration cap; 1 = usage.
+# Exit codes: 0 = DONE, cleanly paused, or gate-pending; 2 = BLOCKED / no-progress (human needed);
+#             3 = iteration cap; 1 = usage.
+#
+# Compatible with bash 3.2+ (macOS default): C-style for-loops and indexed arrays only — no
+# associative arrays, no mapfile/readarray.
 
 set -euo pipefail
 
-LEDGER="" ; AGENT_CMD="" ; MAX_ITERS=100 ; WORKTREE="" ; LOG_DIR="" ; YOLO=0
+LEDGER="" ; AGENT_CMD="" ; MAX_ITERS=100 ; WORKTREE="" ; LOG_DIR="" ; YOLO=0 ; SKILL_NAME="orchestrate-build"
 
 usage() { grep -E '^#( |$)' "$0" | sed -E 's/^# ?//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --ledger)    LEDGER="${2:-}"; shift 2 ;;
+    --skill)     SKILL_NAME="${2:-}"; shift 2 ;;
     --agent-cmd) AGENT_CMD="${2:-}"; shift 2 ;;
     --max-iters) MAX_ITERS="${2:-}"; shift 2 ;;
     --worktree)  WORKTREE="${2:-}"; shift 2 ;;
@@ -58,8 +66,8 @@ LEDGER="$(cd "$(dirname "$LEDGER")" && pwd)/$(basename "$LEDGER")"   # absolutiz
 # worktree can still find the skill files (repo-relative "skills/..." paths would not resolve there).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-ORCH_SKILL="$SKILLS_ROOT/orchestrate-build/SKILL.md"
-[ -f "$ORCH_SKILL" ] || echo "drive-build.sh: warning: orchestrate-build SKILL not found at $ORCH_SKILL" >&2
+DRIVER_SKILL="$SKILLS_ROOT/$SKILL_NAME/SKILL.md"
+[ -f "$DRIVER_SKILL" ] || echo "drive-build.sh: warning: $SKILL_NAME SKILL not found at $DRIVER_SKILL" >&2
 
 # Never-fail ledger reader: prints the value or empty; tolerates leading whitespace + trailing inline comments.
 # (Must not fail under `set -e`: a missing key is normal, not an error.)
@@ -102,7 +110,15 @@ if [ "$YOLO" -ne 1 ] && [ -z "$AGENT_CMD" ]; then
 fi
 
 [ -n "$WORKTREE" ] || WORKTREE="$(status_val buildWorktree)"
-[ -n "$LOG_DIR" ] || LOG_DIR="$(dirname "$LEDGER")/drive-build-logs"
+if [ -z "$LOG_DIR" ]; then
+  LDIR="$(dirname "$LEDGER")"
+  # Committed mode: logs belong under docs/build/logs/ (the one gitignored subtree), not beside the ledger.
+  if [ -f "$LDIR/README.md" ] && grep -qF '<!-- build-memory: v2 -->' "$LDIR/README.md" 2>/dev/null; then
+    LOG_DIR="$LDIR/logs/drive-build"
+  else
+    LOG_DIR="$LDIR/drive-build-logs"
+  fi
+fi
 mkdir -p "$LOG_DIR"
 
 # Single-driver lock (atomic mkdir), auto-released on exit — two loops on one ledger would corrupt state.
@@ -118,11 +134,13 @@ echo "drive-build: agent=[${BASE_ARGV[*]}] yolo=$YOLO worktree=${WORKTREE:-<none
 
 for ((i = 1; i <= MAX_ITERS; i++)); do
   STATUS="$(status_val projectStatus)" ; NEXT="$(status_val nextTicket)"
-  PAUSED="$(status_val pauseRequested)" ; BLOCKED="$(status_val blockedOn)"
+  [ -n "$NEXT" ] || NEXT="$(status_val nextUnit)"          # synthesize-spec ledgers use nextUnit
+  PAUSED="$(status_val pauseRequested)" ; BLOCKED="$(status_val blockedOn)" ; PREV_RP="$(status_val returnPass)"
 
   case "$STATUS" in
     DONE)    echo "drive-build: projectStatus=DONE — build complete."; exit 0 ;;
     BLOCKED) echo "drive-build: projectStatus=BLOCKED (blockedOn: ${BLOCKED:-?}) — human needed."; exit 2 ;;
+    PAUSED)  echo "drive-build: projectStatus=PAUSED — gate pending / operator pause; answer in LEDGER.md and re-run."; exit 0 ;;
   esac
   [ "$PAUSED" = "true" ] && { echo "drive-build: pauseRequested=true — stopping at ticket boundary."; exit 0; }
   case "$BLOCKED" in
@@ -133,13 +151,14 @@ for ((i = 1; i <= MAX_ITERS; i++)); do
 
   echo "── iter $i/$MAX_ITERS · unit: $NEXT ──────────────────────────────"
 
-  PROMPT="You are a fresh session with no memory of prior sessions. Follow the orchestrate-build skill at \
-'$ORCH_SKILL' (its sibling skills implement-spec and decompose-spec are under '$SKILLS_ROOT'). Operate on the \
-build ledger at '$LEDGER'. Execute EXACTLY ONE unit — the one named by nextTicket ('$NEXT'): if SETUP, run the \
-SETUP checklist; if a ticket id, run that single ticket end-to-end by invoking implement-spec against the \
-ticket's contract; if CAPSTONE, run the capstone checklist. Then update the ledger (advance CURRENT STATE, \
-append a PHASE LOG entry) and STOP. Do NOT proceed to another unit and do NOT launch drive-build.sh — this \
-external loop drives continuation. Never fabricate green: on any block, set blockedOn in the ledger and stop."
+  PROMPT="You are a fresh session with no memory of prior sessions. Follow the $SKILL_NAME skill at \
+'$DRIVER_SKILL' (its sibling skills implement-spec, decompose-spec and build-memory are under '$SKILLS_ROOT'). \
+Operate on the ledger at '$LEDGER'. Execute EXACTLY ONE unit — the one named by the ledger's next-unit pointer \
+('$NEXT') — per that skill's instructions (for orchestrate-build: if SETUP, run the SETUP checklist; if a ticket \
+id, run that single ticket end-to-end by invoking implement-spec against the ticket's contract). Then update the \
+ledger (advance CURRENT STATE, append a PHASE LOG entry) and STOP. Do NOT proceed to another unit and do NOT \
+launch drive-build.sh — this external loop drives continuation. Never fabricate green: on a REAL block set \
+blockedOn and stop; a pending gate is a RETURN PASS row, not a block."
 
   ARGV=( "${BASE_ARGV[@]}" "$PROMPT" )
   LOG="$LOG_DIR/iter-$(printf '%03d' "$i")-${NEXT}.log"
@@ -155,15 +174,24 @@ external loop drives continuation. Never fabricate green: on any block, set bloc
 
   # Progress = the ledger moved. If it didn't, diagnose (don't spin).
   NEW_STATUS="$(status_val projectStatus)" ; NEW_NEXT="$(status_val nextTicket)" ; NEW_BLOCKED="$(status_val blockedOn)"
+  [ -n "$NEW_NEXT" ] || NEW_NEXT="$(status_val nextUnit)"
+  NEW_RP="$(status_val returnPass)"
   if [ "$NEW_NEXT" = "$NEXT" ] && [ "$NEW_STATUS" = "$STATUS" ]; then
     case "$NEW_BLOCKED" in
       ""|"(nothing)"|"nothing"|"none"|"(none)")
+        # No progress and no real block. A gate that needs the operator shows up as a NEW returnPass entry
+        # (or projectStatus=PAUSED, handled at the top) — that is a clean stop, not a failure.
+        if [ -n "$NEW_RP" ] && [ "$NEW_RP" != "(none)" ] && [ "$NEW_RP" != "$PREV_RP" ]; then
+          echo "drive-build: gate pending on '$NEXT' — answer in LEDGER.md GATE DECISIONS and re-run (returnPass: $NEW_RP)."
+          exit 0
+        fi
         echo "drive-build: unit '$NEXT' made no ledger progress (agent exit=$rc)." >&2
         echo "  Most common cause: writes were denied because autonomy is off — re-run with --yolo." >&2
-        echo "  See the agent transcript: $LOG" >&2 ;;
-      *) echo "drive-build: unit '$NEXT' set blockedOn='$NEW_BLOCKED' (agent exit=$rc) — human needed. See $LOG." >&2 ;;
+        echo "  See the agent transcript: $LOG" >&2
+        exit 2 ;;
+      *) echo "drive-build: unit '$NEXT' set blockedOn='$NEW_BLOCKED' (agent exit=$rc) — human needed. See $LOG." >&2
+         exit 2 ;;
     esac
-    exit 2
   fi
   [ "$rc" -eq 0 ] || echo "drive-build: note: agent exited $rc but the ledger advanced; continuing. See $LOG." >&2
 done

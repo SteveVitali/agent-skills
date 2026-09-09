@@ -50,9 +50,15 @@ harness:
   moment; anything not in memory is lost."* The ledger carries that contract at its head.
 - **Manus, *Context Engineering* (2025):** the filesystem as unlimited, persistent, externalized memory.
 
-So the ledger is simultaneously the plan, the resume point for *any* fresh context (worker or the loop itself),
-the human's intervention surface (§4), and the seed of the final report. It lives in the repo's gitignored
-scratch dir — the same place `implement-spec` puts its per-run ledger, so the two nest.
+So the ledger is simultaneously the **state** (the *plan* is the committed manifest — the ledger holds no PHASE
+PLAN), the resume point for *any* fresh context (worker or the loop itself), the human's intervention surface
+(§4), and the seed of the final report. In a repo that has opted into committed build memory it is
+`docs/build/LEDGER.md` — **committed, and travelling with the chain tip**, so a sibling build worktree reads its
+own tip's ledger, not the main worktree's copy (the sibling-worktree defect a gitignored scratch dir caused).
+The worker closes its own ticket in the ledger (`implement-spec` Phase 6.5), so the chain advances even on the
+manual floor with no orchestrator; this skill then *confirms* the advance rather than performing it. A repo that
+has not opted in keeps the gitignored scratch ledger, unchanged. The layout is `build-memory`'s
+`layout.md`, which this skill cites.
 
 ## 3. Writes stay single-threaded (the correction that matters most)
 
@@ -107,7 +113,7 @@ initiator but the human exists, so the skill degrades to the `manual` floor — 
 predecessor, and still fully ledger-driven and resumable. We never simulate autonomy by batching tickets into
 one accumulating context; that would reintroduce the exact failure this design removes.
 
-## 6. Why the capstone is mandatory
+## 6. Why the capstone is mandatory — and why it is now tickets
 
 Per-ticket verification proves each *piece*; it structurally cannot see cross-cutting requirements no ticket
 owned, inter-ticket seams, or the fact that in an additive build the **fully-composed path may never have run
@@ -116,14 +122,24 @@ whole — a fresh-context whole-chain gap analysis vs the entire spec, gap closu
 so a chain that no one ever ran composed does not ship. It is also where the seams introduced by decomposition
 (and by any run-time split) are reconciled.
 
+Since 0.2.0 the capstone is **tickets, not a special unit** (BM-TAIL-01): `decompose-spec` appends `CAP.1`
+(gap analysis), `CAP.2` (composed verification), `CAP.3` (closure), a `GATE-ACCEPT` signature marker, then the
+`REC.*` reconciliation and `DOC.*` docs rows, each an ordinary `implement-spec` contract the loop runs like any
+other ticket. The context-size argument that justifies per-ticket fresh contexts applies to the capstone too —
+judging a whole build in one accumulating context is exactly the rot this design removes. The one-context
+procedure is retained verbatim in `modes/legacy-capstone.md` for `legacy_capstone=true` and for a legacy ledger
+that reaches `nextTicket: CAPSTONE` (which otherwise converts to the tail via `decompose-spec mode=extend`).
+`DONE` now requires every chain row landed-or-skipped, `BUILD_INDEX.md` complete, no `OPEN` deferral without a
+landing, and the `GATE-ACCEPT` readout signed (BM-TAIL-03).
+
 ## 7. Anatomy: section → mechanism → grounding
 
 | Section | Mechanism | Grounding |
 |---|---|---|
-| 0 Orient | Parse ledger `CURRENT STATE`; route SETUP/ticket/CAPSTONE; honor block/pause | Durable state as single source of truth (§2) |
-| 1 SETUP | Dedicated worktree off pinned base; baseline-green; benchmark fixture | Isolation; "smoke-test before building" |
-| 2 Loop | Fresh context per ticket → `implement-spec` full rigor → record → advance; split-on-overflow | Fresh context (§1); single-threaded writes (§3); adaptivity |
-| 3 CAPSTONE | Fresh whole-chain gap analysis + composed E2E | Composed-path-never-run failure (§6) |
+| 0 Orient | Parse ledger `CURRENT STATE` (state; the manifest is the plan); resolve memory root; route SETUP/ticket/legacy; honor block/pause | Durable state as single source of truth (§2) |
+| 1 SETUP | Dedicated worktree off pinned base; baseline-green; benchmark fixture; commit seeded memory (committed mode) | Isolation; "smoke-test before building" |
+| 2 Loop | Fresh context per ticket → `implement-spec` full rigor → worker closes its own ledger → **confirm** the advance; gate protocol; split/insert | Fresh context (§1); single-threaded writes (§3); adaptivity |
+| 3 Standard tail | `CAP.*` / `GATE-ACCEPT` / `REC.*` / `DOC.*` run as ordinary tickets; `DONE` gated by BM-TAIL-03 | Composed-path-never-run failure (§6); capstone-as-tickets |
 | 4 Progress/pause | Progress line + ledger as artifact; pause at boundary; intervene by editing ledger | Boundary HITL (§4) |
 | Dispatch | 3-tier ladder bound to harness capability | Fresh-context-is-external (§1, §5) |
 

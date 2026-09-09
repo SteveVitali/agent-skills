@@ -340,6 +340,20 @@ done < "$DOCS_FILE"
 
 echo "  Checking coverage gaps..."
 check_coverage_gaps
+
+# 1F. Build-memory section — a repo with committed build memory (a docs/build/README.md marker)
+# MUST carry a "Build memory" section in its root AGENTS.md (BM-DOCS-01). Its absence is a coverage gap.
+check_build_memory_section() {
+  local bm_readme="$REPO_ROOT/docs/build/README.md"
+  [ -f "$bm_readme" ] || return 0
+  grep -qF '<!-- build-memory: v2 -->' "$bm_readme" 2>/dev/null || return 0
+  local root_doc="$REPO_ROOT/AGENTS.md"
+  if [ ! -f "$root_doc" ] || ! grep -qiE '^##[[:space:]]+Build memory' "$root_doc" 2>/dev/null; then
+    emit_issue "minor" "coverage_gap" "AGENTS.md" "0" \
+      "Repo has committed build memory (docs/build/README.md marker) but the root AGENTS.md has no \"Build memory\" section (BM-DOCS-01)" "docs/build"
+  fi
+}
+check_build_memory_section
 echo ""
 
 # ─────────────────────────────────────────────────────────────────────────────
