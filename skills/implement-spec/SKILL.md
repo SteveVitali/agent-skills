@@ -90,6 +90,19 @@ git rev-parse --show-toplevel   # confirm you are where you think you are
 If the worktree does not yet exist and the operator asked you to create it, create it from the base ref (see
 0.2). Otherwise assume it exists and is on the intended branch.
 
+**Resolve the build-memory root (portability).** A repo may commit its build memory under `docs/build/` (the
+multi-session build layout the `build-memory` skill owns). Resolve which mode applies once, up front:
+
+```bash
+bash skills/build-memory/scripts/memory-root.sh "$TASK_ROOT"   # prints: mode=<committed|scratch>  root=<abs path>
+```
+
+In **committed** mode the run ledger (0.4), ADRs, `DEFERRALS.md` rows and the `BUILD_INDEX.md`/`LEDGER.md` close
+(6.5) live under that root and are committed with the change. In **scratch** mode — any repo without a
+`docs/build/README.md` marker — everything below is byte-for-byte the 0.1.x behaviour, so a repo that never opted
+in sees no change. (Resolve the script by its installed skill name, or by an absolute skills root when running in
+another repo's worktree, exactly as Phase 3 resolves `self-review`.)
+
 ### 0.2 — Determine base + feature branch
 
 - `BASE_BRANCH` = provided `base_branch`, else `git branch --show-current`.
@@ -128,21 +141,38 @@ git rev-parse HEAD          # base tip you branched from
    since the spec was written, record the drift in the run ledger (0.4) and adapt; if the drift invalidates the
    spec's design, that is a hard blocker per the autonomy contract — surface it rather than silently improvising
    a new design.
+4. **In committed mode, read the build-memory contract for this run.** Read the `AGENTS.md` "Build memory"
+   section, then **`docs/tickets/DEFERRALS.md` first** — a deferral not in that file did not happen, and closing
+   any `OPEN` row this ticket (or a landed prerequisite it depends on) unblocks is **in scope** for this run
+   (verify for real, then flip to `DONE` with date + evidence). Read the ticket's own header: `Depends on`,
+   `Gate status`, `Live stage`. **If the ticket is `Kind: skeleton`, STOP** — a skeleton has no runnable body
+   until its gate opens (BM-TICKET-03); report that and do nothing else. If the `Gate status` block has unticked
+   items, the operator's answers are in `docs/build/LEDGER.md` GATE DECISIONS — copy them into your first commit
+   and act on them; an answer of "skip" runs the ticket ungated and records the gated remainder as `DEFERRALS.md`
+   rows (the ticket is then listed in `RETURN PASS`). This step is inert in scratch mode.
 
 ### 0.4 — Create the run ledger (durable state) *(skip if `ledger=false`)*
 
 Context is lossy over a run this long — compaction and session resets degrade exactly the fine-grained early
 details Phase 4 depends on. Everything the later phases need must live on disk, not in the context window.
-Create one ledger file in a stable, **gitignored** scratch location — honor the repo's canonical agent scratch
-dir if it defines one, else default to a shared dir under the main worktree:
+The ledger's location depends on the mode resolved in 0.1:
 
 ```bash
+# Committed mode (docs/build/README.md marker present): the run ledger is COMMITTED at runs/<ID>.md,
+# where <ID> is this ticket's id (from its header/filename); it lands with the change (§6.5).
+LEDGER="<memoryRoot>/runs/<ID>.md"        # e.g. docs/build/runs/T3.md
+
+# Scratch mode (no marker) — unchanged 0.1.x behaviour: a gitignored, branch/date-named ledger,
+# honoring the repo's canonical agent scratch dir if it defines one.
 SCRATCH="${AGENT_SCRATCH_DIR:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.agents/scratch}"
 mkdir -p "$SCRATCH"   # must be gitignored; never commit ledger files
 LEDGER="$SCRATCH/implement-spec_${branch_name//\//-}_$(date +%Y%m%d).md"
 ```
 
-Seed it with: spec path, base commit, branch, and the Phase 0.3 requirements + acceptance-criteria checklist;
+In committed mode the run ledger's sections follow `runs/<ID>.md` (BM-INDEX-02): `Spec / Base / Branch / Config`,
+`## Deferrals read`, `## Requirements`, `## Acceptance criteria`, `## Plan`, `## Test matrix`, `## Progress`,
+`## Gap table`, `## Evidence log`, `## Evidence report`. Seed it with: spec path, base commit, branch, and the
+Phase 0.3 requirements + acceptance-criteria checklist;
 leave placeholder sections for the test matrix (1.4), the gap table (4.1), and the evidence log (5.4). Keep it
 current at every phase transition. The ledger is three things at once:
 - the **compaction-proof working checklist** for the whole run,
@@ -265,6 +295,13 @@ spec would consider obviously correct. If a spec requirement turns out to be gen
 do NOT silently skip it — record the conflict explicitly for the final report and choose the closest faithful
 alternative.
 
+**Record the decisions (committed mode).** Every `MET-DIFFERENTLY` verdict in the gap table, every SHOULD-level
+deviation, and every decision the ticket's `## Notes` says it owns gets an ADR at
+`docs/adr/ADR-NNN-<slug>.md` (the `build-memory` template's Context / Decision / Consequences / Alternatives /
+Revisit-trigger shape, BM-ADR-01/03); regenerate the index with the `build-memory` `adr-index` mode
+(`scripts/adr-index.sh docs/adr`); the ADR lands in **this** PR. In scratch mode, record deviations in the
+evidence report as before.
+
 ### 4.3 — Close the gaps, then re-review
 Implement every closure (with tests, per 1.4). After closing, **re-run Phase 3 self-review** on the new changes
 (design + mechanical), then re-walk the gap table until **every row is `met` with evidence** (or explicitly,
@@ -322,6 +359,13 @@ through representative cases and observed the expected behavior."*
 5. **Iterate until convinced.** If a case doesn't behave as specified, that's a Phase-4 gap — fix it and re-run.
    Continue until every representative case demonstrably matches the spec.
 
+**Gate-pending, never fabricated (committed mode, BM-DEFER-02).** When a live check cannot run because the
+ticket's `Live stage` is operator-gated (a budget the operator has not released) or the infrastructure is
+absent, do **not** fail and do **not** invent a pass: append a `DEFERRALS.md` row (its proxy now, what unblocks
+it, how to verify it when unblocked) and report **"gate pending"** for that criterion. The ticket still opens its
+PR; the gate-pending item is carried in `RETURN PASS` and the `BUILD_INDEX` "live verification" column reads
+`gate-pending`.
+
 ### 5.4 — Evidence capture + synthesis
 As you run each level, capture concrete evidence **in the ledger's evidence log** — the command/interaction and
 the salient observed output (test summaries, sample responses, log excerpts, state reads, screenshots/render
@@ -346,7 +390,10 @@ Review `git status` and stage **intentionally** — every staged file should cor
 against the gap table's evidence column). Do not blanket `git add -A`: long runs produce stray one-off
 scripts/fixtures, and those belong in the scratch dir, not the PR. Exclude agent-harness dirs
 (e.g. `.windsurf/`, `.claude/`, `.cursor/`, `.dev/`, `.agents/`) **unless the spec's scope explicitly includes
-them**.
+them**. **In committed mode, the change's build-memory files ARE part of the diff** — stage the
+`docs/build/**`, `docs/adr/**`, and `docs/tickets/DEFERRALS.md` rows this run wrote (the run ledger, ADRs,
+deferrals, any `reports/*`) alongside the code; a legacy `.agents/` scratch dir is still excluded. The close
+commit (6.5) is a second, separate commit.
 
 ```bash
 git status --short                       # review everything the run touched
@@ -361,19 +408,25 @@ git push -u origin "$branch_name"
 ```
 
 ### 6.3 — Open PR (no merge-main, no CI-poll, no Slack — see "does NOT do")
+In committed mode, write the PR body to `docs/build/pr/<ID>.md` first (it is the submitted body, committed with
+the change) and create the PR with `--body-file`, so the proof lives in the tree, not only on GitHub:
 ```bash
+# committed mode: the PR body is a committed artifact
 gh pr create --base "$BASE_BRANCH" --head "$branch_name" \
-  --title "<concise title>" --body "<structured description>"
-# or, if it exists: gh pr edit "$branch_name" --title "<title>" --body "<description>"
+  --title "<concise title>" --body-file docs/build/pr/<ID>.md
+# scratch mode (or no pr/ file): pass the body inline
+gh pr create --base "$BASE_BRANCH" --head "$branch_name" --title "<concise title>" --body "<structured description>"
+# or, if it exists: gh pr edit "$branch_name" --title "<title>" --body-file docs/build/pr/<ID>.md
 ```
 PR body: **Summary** (what + why) · **What changed** (files/areas) · **Design decisions** · **Verification**
-(what was built/tested/driven) · a link/reference to the spec it implements · a **condensed acceptance-criteria
-→ evidence table** (from the ledger), so the PR is self-reviewing and the proof survives outside the chat
-transcript.
+(what was built/tested/driven) · a link/reference to the spec it implements · the requirement ids stamped · a
+**condensed acceptance-criteria → evidence table** (from the ledger), so the PR is self-reviewing and the proof
+survives outside the chat transcript.
 
 ### 6.4 — Evidence report (the proof — this is the deliverable) *(if `evidence_report=false`: replace with a concise standard summary)*
-The ledger is the source of truth — derive the report from it, don't reconstruct from memory. Return to the
-operator, in the final message:
+The ledger is the source of truth — derive the report from it, don't reconstruct from memory. In committed mode
+the evidence report is **also** the `## Evidence report` section of `runs/<ID>.md` and the body of
+`pr/<ID>.md` — write it once, in the ledger, and reuse it. Return to the operator, in the final message:
 1. **PR link** (`gh pr view "$branch_name" --json url --jq '.url'`).
 2. **Acceptance-criteria table**: every AC from the spec → met/deferred → the concrete evidence (test output,
    observed live behavior, file:line) that proves it. This is the gap table from Phase 4, now backed by Phase 5
@@ -385,7 +438,31 @@ operator, in the final message:
 5. **Deviations/deferrals** (if any): where the implementation intentionally differs from the spec, with the
    rationale.
 
-### 6.5 — Notify (optional, macOS example)
+### 6.5 — Close the ticket *(committed mode, when the spec is a chain ticket)*
+When this run implemented a **chain ticket** — detected by a `Sequence:` header on the ticket plus a
+`docs/build/LEDGER.md` in the resolved root — the worker closes its own ticket (BM-INDEX-01, and D4 of the
+build-memory design: on the manual floor there is no orchestrator to advance the ledger). After the PR is up:
+
+1. **`BUILD_INDEX.md` row** — append one row for this ticket:
+   `| seq | ticket | kind | branch | PR | base | landed | ADRs | deferrals opened → closed | live verification (run / fixture-only / n-a / gate-pending) | evidence |`,
+   `evidence` pointing at `runs/<ID>.md#evidence` or `pr/<ID>.md`.
+2. **`LEDGER.md`** — advance `CURRENT STATE` (`lastCompleted: <ID>`, `nextTicket:` = the next chain row, bump
+   `updatedAt`, advance `chainTip` for a chained ticket) and append the fixed-shape `PHASE LOG` "done" entry
+   (branch · PR · base · summary · **Verify:** … · **Deferrals:** opened/closed ids · **Deviations:** … ·
+   chainTip → … · next → …). A pending gate is a `RETURN PASS` row, **not** a `blockedOn`.
+3. **Validate** — `bash skills/build-memory/scripts/check-build-memory.sh .` must exit 0; a failure is a real
+   block, not something to commit past.
+4. **Commit + push** the ledger advance as a **second, separate** commit:
+   ```bash
+   git add docs/build/LEDGER.md docs/build/BUILD_INDEX.md
+   git commit -m "docs(build): close <ID>"
+   git push
+   ```
+
+`orchestrate-build` then only *confirms* the advance (ledger moved, index row present, run ledger present,
+validator green) rather than performing it. In scratch mode this step is skipped.
+
+### 6.6 — Notify (optional, macOS example)
 ```bash
 osascript -e 'display notification "PR is up with a spec-completeness evidence report" with title "implement-spec" sound name "Glass"'
 ```

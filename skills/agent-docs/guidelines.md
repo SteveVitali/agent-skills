@@ -102,3 +102,29 @@ docs — never from assumption.
 5. **Line count updates** — when updating, use `wc -l` to get actual counts.
    Round to nearest 50 for files <1000 lines, nearest 100 for larger files.
    Use `~` prefix (e.g., `~2.4k lines`).
+
+## Build memory (repos that opt in)
+
+Applies **only** when the repo has committed build memory — a `docs/build/README.md`
+containing `<!-- build-memory: v2 -->`. In such a repo, the root `AGENTS.md` MUST carry a
+**"Build memory"** section so an agent running a build ticket cold knows where state lives and
+what the append-only rules are. `bootstrap` generates it and `refresh` keeps it present; the
+`agent-docs` freshness detector reports its **absence** in a marked repo as a coverage gap.
+
+Generate the section from the `build-memory` template
+(`skills/build-memory/templates/AGENTS-build-memory.md`), adapted to the repo's voice and line
+budget. It must cover, at minimum:
+
+1. **`docs/tickets/DEFERRALS.md` — read it first, every run** as a **Critical Gotcha** (the
+   genuinely non-obvious rule: owed work lives here, closing an unblocked `OPEN` row is part of
+   your run, a deferral not in the file did not happen — skipping it is how obligations silently
+   vanish between sessions).
+2. Where the rest lives: `docs/tickets/00_MANIFEST.md` (the chain), `docs/build/LEDGER.md` (the
+   machine state), `docs/build/` (runs, PR bodies, `BUILD_INDEX.md`, readouts), `docs/adr/`
+   (`README.md` is generated — never hand-edit).
+3. The cross-build rules: contracts and history are **append-only** (amend by a dated note or a
+   new ADR, never a rewrite); PRs **stack**; a **gate is a pause, not a block**; **secrets never**
+   enter a ledger. Do not restate the full layout — point at `skills/build-memory/layout.md`.
+
+This section is a pointer layer, not a second copy of the layout: keep it short, and let
+`build-memory`'s `check-build-memory.sh` own structural validation.

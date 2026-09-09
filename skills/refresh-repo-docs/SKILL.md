@@ -79,6 +79,23 @@ Phase 1 go in it before any edits happen (audit fully, then fix — editing
 while auditing loses the cross-doc picture, and the ledger survives context
 compaction).
 
+**Read the `docs/README.md` mode table when present** (the map `build-memory`
+seeds, BM-DOCS-02). Each entry carries a mode that fixes how this skill may
+touch it:
+
+- **generated** (e.g. `docs/adr/README.md`) → never hand-edit; fix the source
+  or regenerate with the named generator, and note it (per the "never hand-edit
+  generated docs" editing standard below).
+- **frozen** / **historical** / **append-only** → **report-only**: a stale
+  claim in a frozen spec, a historical `docs/build/` record, or an append-only
+  `DEFERRALS.md` is surfaced in the report, not rewritten — editing it would
+  falsify the record. `docs/tickets/` and `docs/build/` default to
+  **historical** even absent an explicit row.
+- **living** → the normal stale/cruft/gap/mode-drift treatment.
+
+Scope the worklist accordingly: a generated or report-only doc never receives
+an in-place prose fix.
+
 ## Phase 1 — Audit the worklist
 
 For each doc in the worklist:

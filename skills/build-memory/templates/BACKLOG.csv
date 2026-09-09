@@ -1,0 +1,6 @@
+bl_id,title,type,sources,req_ids,package,blocks,landing,gate,size,status
+# Template: docs/build/BACKLOG.csv (BM-RECON-01). Written by the REC.1 ticket via reconcile-build mode=backlog.
+# Every OPEN/PARTIAL deferral, every ADR revisit trigger, every OPEN FINDINGS entry, every spec-mandated
+# register's deferred row, and every non-MET COVERAGE_MATRIX row appears in EXACTLY ONE `sources` cell.
+# size ∈ S|M|L. status ∈ open|closed|accepted. landing names the ticket/round that will do it (no TBD).
+# check-backlog.sh (in reconcile-build) verifies completeness. Delete these comment lines when instantiating.

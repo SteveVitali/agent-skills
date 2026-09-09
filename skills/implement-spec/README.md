@@ -261,9 +261,13 @@ The repo-specific bindings are the adapter layer to re-point when porting:
 - **A changed-files → verification mapper** (a `detect-targets`/`verify` script or equivalent) — the
   mechanical feedback loop. Any "map my diff to build/test/lint commands" tool works; absent one, the
   skill falls back to deriving commands from the repo's docs and build system.
-- **A stable, gitignored scratch location** for the run ledger (`$AGENT_SCRATCH_DIR` or the default
-  `.agents/scratch/` under the main worktree). Keep it *outside* per-worktree state if multiple
-  checkouts share a machine.
+- **A build-memory root** for the run ledger, resolved by `build-memory`'s `memory-root.sh`. In a repo
+  that has opted into committed build memory (a `docs/build/README.md` marker), the run ledger is a
+  **committed** `docs/build/runs/<ID>.md` that lands with the change and the worker closes its own ticket
+  in `LEDGER.md`/`BUILD_INDEX.md` (Phase 6.5). Otherwise the ledger is a stable, **gitignored** scratch
+  location (`$AGENT_SCRATCH_DIR` or the default `.agents/scratch/` under the main worktree) — keep it
+  *outside* per-worktree state if multiple checkouts share a machine. A repo that never opts in sees no
+  change (BM-COMPAT-01).
 - The `AGENTS.md` / `agent_docs/` hierarchy — the just-in-time knowledge layer Phase 0.3 loads.
 - The sibling `self-review` skill — the two-pass review procedure Phase 3 invokes.
 - **The repo's local-dev launcher** — the Phase 5.3 environment; discovered from the repo's docs.

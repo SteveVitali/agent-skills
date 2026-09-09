@@ -63,11 +63,23 @@ a terminal can execute. Only the *dispatch* step binds to harness capability.
 - **Confirm the working checkout.** If a `buildWorktree` is set in the ledger, confirm cwd is it
   (`git rev-parse --show-toplevel`); if not, and you are the orchestrator process, `cd` there — a command run in
   the wrong worktree corrupts the wrong branch.
-- **Read `CURRENT STATE`** → `nextTicket`, `lastCompleted`, `blockedOn`, `pauseRequested`, `chainTip`, `autonomy`.
-  - `projectStatus: DONE` → print the completion summary (every ticket PR + the capstone PR) and STOP.
-  - `blockedOn` non-empty → surface it, ask how to proceed, STOP. **Never guess past a block.**
+- **Resolve the memory root + mode.** `bash <skills>/build-memory/scripts/memory-root.sh "$buildWorktree"`
+  prints `mode=<committed|scratch>` and `root=<abs path>`. In **committed** mode the ledger is
+  `<root>/LEDGER.md`, committed and travelling with the chain tip (a sibling worktree reads its own tip, not the
+  main worktree's copy); in **scratch** mode it is the legacy gitignored ledger, unchanged.
+- **Read `CURRENT STATE`** → `nextTicket`, `lastCompleted`, `blockedOn`, `pauseRequested`, `returnPass`,
+  `manifest`, `memoryRoot`, `chainTip`, `autonomy`. The `manifest:` key names the plan (`docs/tickets/00_MANIFEST.md`);
+  the tickets themselves are the contracts the worker loads.
+  - **Legacy ledger** (PHASE PLAN present, `manifest:` absent): drive it from its own PHASE PLAN. On
+    `nextTicket: CAPSTONE`, run `decompose-spec mode=extend tail=full` to convert it to v2 (write the manifest
+    if missing, append the standard tail rows) and continue — unless `legacy_capstone=true`, which runs the
+    one-context procedure retained verbatim in [`modes/legacy-capstone.md`](modes/legacy-capstone.md) (BM-COMPAT-03).
+  - `projectStatus: DONE` → print the completion summary (every ticket PR + the tail PRs) and STOP.
+  - `blockedOn` non-empty → surface it, ask how to proceed, STOP. **Never guess past a block.** (A pending gate
+    is NOT a block — it is a `RETURN PASS` row; §2.1.)
   - `pauseRequested: true` → report where the build stands and STOP (the human asked to intervene).
-  - `nextTicket: SETUP` → §1. `nextTicket: CAPSTONE` → §3. Otherwise → §2.
+  - `nextTicket: SETUP` → §1. Otherwise → §2 (the tail rows `CAP.*`, `REC.*`, `DOC.*` are ordinary chain
+    tickets; there is no special CAPSTONE unit in v2 — see §3).
 - **Determine the dispatch tier** from `dispatch` (or auto-detect: `headless` if a supported agent CLI is on
   PATH, else `subagent` if the harness exposes one, else `manual`). Record it.
 - **Check dispatch-vs-sizing coherence.** Read the ledger's `dispatchTarget` (what `decompose-spec` sized the
@@ -94,8 +106,13 @@ git worktree add -b "$BUILD_BRANCH_BASE" "$BUILD_WORKTREE" "$PINNED_BASE_SHA"
 Then: run the repo's baseline build/test to confirm the pinned base is green (pre-existing breakage discovered
 mid-build gets misattributed to a ticket — find it now); stand up the benchmark fixture **if** any ticket is
 agentic, using the ledger's safe-creation recipe (call out any irreversible-pollution hazard). Finally set
-`chainTip = BUILD_BRANCH_BASE`, `pinnedBaseSha`, `buildWorktree`, `buildBranchBase`, `autonomy`, `nextTicket=T1`,
-`projectStatus=IN_PROGRESS`; append a "SETUP done" PHASE LOG entry; write the ledger back.
+`chainTip = BUILD_BRANCH_BASE`, `pinnedBaseSha`, `buildWorktree`, `buildBranchBase`, `autonomy`, `nextTicket`
+= the first chain row, `projectStatus=IN_PROGRESS`; append a "SETUP done" PHASE LOG entry; write the ledger back.
+
+**Committed mode:** resolve the root with `memory-root.sh` (§0); the seeded `docs/build/**`, `docs/tickets/**`
+and `docs/adr/**` that `decompose-spec`/`build-memory init` wrote are part of the tree — commit them on the base
+branch as the build's first commit, and run `bash <skills>/build-memory/scripts/check-build-memory.sh .`
+(a failure here is a real block). In scratch mode the ledger stays gitignored, unchanged.
 
 **Await operator go-ahead before creating the worktree/fixtures unless `autonomy=auto`.** SETUP is a pause point
 in `checkpoint` and `manual`.
@@ -119,6 +136,23 @@ dependency is missing, record the gap and STOP. Print a **situation report**: th
 `forks-from` base, the exact scope (spec §§ + contract), the verify target, and whether acceptance is
 deterministic or agentic. Then gate per `autonomy` (`auto`: proceed; `checkpoint`: proceed unless this is a
 configured Nth-ticket pause; `manual`: await go-ahead).
+
+**Ticket gate protocol (BM-GATE-01/02).** If the ticket's `Gate status` block has **unticked** items, pause
+(in `checkpoint`/`manual`; in `auto`, treat every item as "skip"), present the block, record each answer in the
+ledger's `GATE DECISIONS` table (`| date | ticket | gate | item | answer | consequence |` — secrets never;
+`provided: yes/no` only), commit `LEDGER.md` on the chain tip, and dispatch with the added prompt line: *"Gate
+answers are in `docs/build/LEDGER.md` GATE DECISIONS — copy them into the ticket's Gate status block in your
+first commit and act on them."* An answer of **"skip"** runs the ticket ungated: it does everything up to the
+gate, records the gated remainder as `DEFERRALS.md` rows, opens its PR, and is listed in `RETURN PASS`
+(`| ticket | gates | what the operator must do | re-run line |`, and in the `returnPass:` key) with its re-run
+line. Re-running the same ticket file after the operator ticks is idempotent. **A pending gate is a pause, not a
+`blockedOn`.**
+
+A **`GATE-G<k>` marker row** (kind gate) is not dispatched to `implement-spec`: read its readout (or produce it
+from the named evidence sources when the marker says the orchestrator authors it), present it, record the
+operator's disposition (PASSED / SKIPPED-BY-OPERATOR / NOT PASSABLE + what would pass it) in `GATE DECISIONS`
+and the append-only `docs/build/readouts/GATE-G<k>.md`, commit on the chain tip, then continue or stop. **Never
+guessed past** (BM-GATE-03).
 
 ### 2.2 Dispatch to a fresh context running `implement-spec`
 Hand the ticket to a fresh context via the resolved dispatch tier. In **every** tier the fresh context is
@@ -155,22 +189,31 @@ byte-identity/regression guard; **agentic** tickets → the benchmark-harness ru
 slot, asserting the running binary == HEAD, repeat-scored (N≥3), against the ticket's sub-metric — never a single
 whole-set number, and only against safe/tagged fixtures.
 
-### 2.3 Record completion + advance
-After the worker reports a pushed PR + evidence report:
-1. Append a PHASE LOG entry: date, ticket, branch, PR URL, one-line summary, verify status, **acceptance
-   evidence** (the concrete test output / measured shift, not "done").
-2. Update `CURRENT STATE`: `lastCompleted=T#`; advance `nextTicket` per the plan order — **after the LAST ticket,
-   `nextTicket=CAPSTONE`, never straight to `DONE`**; advance `chainTip` **only for chained tickets**
-   (out-of-chain tickets do not); bump `updatedAt`. Write the ledger back.
-3. **Never fabricate green.** If the worker blocked, self-review stayed red, or an agentic metric regressed: set
-   `blockedOn`, record it, do NOT advance `nextTicket`, STOP.
+### 2.3 Confirm the close (the worker advances its own ledger)
+In committed mode the **worker closes its own ticket** (`implement-spec` Phase 6.5, D4): on the manual floor
+there is no orchestrator, which is exactly how a build ends with a ledger that never moved. So after the worker
+reports a pushed PR + evidence report, **confirm** rather than advance:
+1. The ledger's `CURRENT STATE` advanced (`lastCompleted` = this ticket, `nextTicket` = the next chain row,
+   `chainTip` advanced for a chained ticket) and a fixed-shape `PHASE LOG` "done" entry was appended.
+2. `BUILD_INDEX.md` has this ticket's row and `docs/build/runs/<ID>.md` exists.
+3. `bash <skills>/build-memory/scripts/check-build-memory.sh .` exits 0.
+If any of these is missing (an older worker, a scratch-mode run, or an interruption), **reconcile it yourself**:
+make the advance, append the PHASE LOG entry with the acceptance evidence, and re-run the validator.
+**Never fabricate green.** If the worker blocked, self-review stayed red, or an agentic metric regressed: set
+`blockedOn`, record it, do NOT advance `nextTicket`, STOP. A pending gate is a `RETURN PASS` row, not a block.
 
-### 2.4 Adaptivity — the plan is revisable
+### 2.4 Adaptivity — the plan is revisable (BM-MANIFEST-03)
 - If the worker reports it **overflowed its context / had to compact heavily / this was really two concerns**,
   the ticket was mis-sized: **split it.** Re-invoke `decompose-spec` on just this ticket's scope (same
-  `dispatch_target`), insert the resulting sub-tickets into `PHASE PLAN` before the rest, record a `SPLIT` event
-  in the PHASE LOG, and continue.
-- If two adjacent unstarted tickets are trivially small and share context, you MAY merge them (record a `MERGE`).
+  `dispatch_target`); write the sub-tickets as `<ID>a`/`<ID>b` files, mark the original `superseded-by-split` in
+  the manifest chain table (keep the original file), add a `## Plan extensions` line, and append a `split` PHASE
+  LOG entry.
+- To **insert** a ticket at run time, use the next filename suffix letter (`16a_…`, `16b_…`), add its chain-table
+  row and a `## Plan extensions` line, and append an `inserted` PHASE LOG entry. Every inserted file is a
+  chain-table row; a file in `docs/tickets/` that is neither a chain row nor a listed companion is a validator
+  error.
+- If two adjacent unstarted tickets are trivially small and share context, you MAY merge them (record it in
+  `## Plan extensions` and the PHASE LOG). Re-run the validator after any of these.
 
 ### 2.5 Continue
 Emit a one-line progress update (§4) at the boundary, then hand off to the next unit. **Who continues depends on
@@ -181,33 +224,28 @@ way no human re-invocation is needed between green tickets.
 
 ---
 
-## 3. CAPSTONE — whole-build closeout *(when `nextTicket: CAPSTONE`, after the last ticket)*
+## 3. The standard tail — the capstone is tickets *(BM-TAIL-01..03)*
 
-The last ticket is done; run the ledger's **CAPSTONE checklist**. This is the same gap-analysis → close → verify
-rigor as a ticket, but scoped to the **entire composed build at once** — the one place the build is judged as a
-whole, because each additive ticket only ever exercised its own slice and the fully-composed path may never have
-run green:
+When a build has more than one ticket, `decompose-spec` appends the tail as **ordinary chain rows** the loop
+runs exactly like any other ticket (there is no special CAPSTONE unit): `CAP.1` capstone gap analysis
+(independent fresh context; the whole-build MET / MET-DIFFERENTLY / PARTIAL / MISSING / AT-RISK-INTEGRATION
+verdicts before reading any run ledger; `COVERAGE_MATRIX.csv`; seam hunt), `CAP.2` composed end-to-end
+verification (the whole build as one unit; env-blocked runs recorded and routed, never a fabricated green),
+`CAP.3` closure (close routed gaps on `<user>/<build>-capstone`; the ACCEPTED-deviations list), the
+`GATE-ACCEPT` marker (the operator signs the accepted-deviations list — run it as a gate per §2.1), then `REC.1`
+backlog + readiness, `REC.2` spec reconciliation, `REC.3` integration plan (each invokes `reconcile-build`), and
+`DOC.1`/`DOC.2` (invoke `refresh-repo-docs` / `agent-docs`). The independence, gap-hunt, and composed-verify
+rigor that used to live here now lives in those tickets' contracts (instantiated from `build-memory`'s
+`templates/tail/`); the loop just runs them.
 
-1. **Fresh whole-chain gap analysis (read-only).** Diff the cumulative composed final state
-   (`git diff <pinnedBaseSha>...<chainTip>` + reading the real final files) against the **spec as a whole** —
-   every §, every cross-cutting invariant, the out-of-scope list, the contracts. Classify each requirement
-   **MET / MET-DIFFERENTLY (sound deviation vs gap-in-disguise) / PARTIAL / MISSING / AT-RISK-INTEGRATION**.
-   Explicitly hunt what a per-ticket lens cannot see: cross-cutting requirements "subsumed by" something else,
-   inter-ticket seams, dual-owned fields, and any composed path never run green end-to-end. **Run this in an
-   independent fresh context (default on)** — it is *the* anti-bias mechanism; skip only on the operator's
-   explicit, recorded say-so.
-2. **Close the real gaps** on a capstone branch (`<user>/<build_name>-capstone`, forked from `chainTip`), each a
-   small scoped change; **consciously accept** sound deviations (record the reasoning). CODE gaps get fixed +
-   tested; VERIFICATION gaps get run.
-3. **Composed end-to-end verification** — the whole build exercised as one unit: a composed-final-state
-   unit/integration test (the fully-wired path the additive tickets never covered) and, if applicable, the
-   fully-composed agentic run on the benchmark set (repeat-scored, running-binary==HEAD, whole-chain acceptance).
-   If the composed run is environment-blocked (creds/quota/infra), that is itself a capstone finding — record the
-   exact blocker + what would close it and route the verdict to the operator; **never fabricate a green.**
-4. When gaps are closed-or-consciously-accepted and the composed E2E is green (or its blocker is recorded +
-   routed): set `projectStatus=DONE`, append a "CAPSTONE done" PHASE LOG entry (gap-closure summary +
-   composed-E2E evidence), and print the completion summary. **Await operator go-ahead before mutating anything.**
-   A real unclosed gap or a regressing composed result sets `blockedOn` and does NOT advance to `DONE`.
+**Done (BM-TAIL-03).** `projectStatus: DONE` requires every chain row landed or consciously skipped (recorded),
+`BUILD_INDEX.md` complete, no `OPEN` deferral without a `landing`, and the `GATE-ACCEPT` readout signed. After
+the last tail row lands and those hold: set `projectStatus=DONE`, append a "DONE" PHASE LOG entry, and print the
+completion summary (every ticket + tail PR). **Await operator go-ahead before mutating anything.** A real
+unclosed gap or a regressing composed result sets `blockedOn` and does NOT advance to `DONE`.
+
+For a **legacy** ledger with `nextTicket: CAPSTONE`, see §0's routing and
+[`modes/legacy-capstone.md`](modes/legacy-capstone.md).
 
 ---
 
@@ -258,6 +296,11 @@ inherit blanket write access by accident.
 - **Writes stay single-threaded** (`parallel=false` default). Parallelize only genuinely disjoint out-of-chain
   work; even then, the capstone reconciles the seams.
 - **Blocked → stop.** A red self-review or a regressing agentic result halts that ticket and the loop; surface it.
+- **A gate is a pause, not a block.** A pending human/milestone gate is a `RETURN PASS` row and, for `drive-build.sh`,
+  a clean exit 0 with "gate pending" — never `blockedOn` (which is reserved for red verification, a missing
+  dependency, or infrastructure the operator refused).
+- **Secrets never enter any ledger.** `GATE DECISIONS`, run ledgers, PR bodies and readouts record
+  `provided: yes/no` for a credential, never its value; the validator greps token shapes and fails on a hit.
 - **Unattended writes are an explicit opt-in** (`--yolo` or an out-of-band allowlist) — never grant blanket
   write/exec access to the loop by default; a missing opt-in surfaces as a no-op, not silent damage.
 - **`implement-spec` full rigor is the bar** — this skill *sequences* it; it does not re-implement or relax it.

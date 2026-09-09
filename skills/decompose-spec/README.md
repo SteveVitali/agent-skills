@@ -93,30 +93,37 @@ to the plan.
 | 5 | Seed the ledger — grep-friendly `CURRENT STATE`, PHASE PLAN, invariants, SETUP/CAPSTONE templates | Durable external state (see orchestrate-build README) |
 | 3+5 | Per-ticket contract files + `00_MANIFEST.md` runbook (default: scratch; `tickets_dir` relocates); cite-don't-copy; requirement-ID stamping; non-code rows | Two production builds hand-rolled it (§7) |
 
-## 7. Per-ticket files + a manifest runbook (default projection; `tickets_dir` relocates)
+## 7. Committed build memory: per-ticket files + a manifest runbook
 
 Two production builds (a 46-ticket chain and a second large build) independently hand-rolled the same artifact
-layout when driving tickets through hand-chained fresh sessions rather than the automated loop: one contract
-file per ticket plus a `00_MANIFEST.md` runbook, gitignored beside the canonical spec. Twice-reinvented
-prompting is the definition of a missing affordance, so the skill now emits the projection **by default** — in
-the gitignored scratch dir beside the ledger, zero repo-tree footprint — with `tickets_dir` relocating it into
-the tree (gitignored) when the operator wants it browsable next to the canonical spec. The per-ticket file's
-benefit is universal across dispatch tiers, not specific to hand-chaining, which is why it is not opt-in. The
-layout earns its place on four grounds:
+layout: one contract file per ticket plus a `00_MANIFEST.md` runbook. They also independently discovered that
+the layout should be **committed**, not gitignored-and-promoted (Eleutheria's ADR-058) — for two reasons the
+0.1.x "keep it in scratch" default got wrong:
+
+- **Promotion is a second, error-prone pass.** Reconstructing build memory after the fact cost a full ticket and
+  lost fidelity. Committing each artifact as it is produced is cheaper and truthful.
+- **The sibling-worktree defect.** A build worktree resolves its scratch dir from `git-common-dir`, which points
+  at the *main* worktree — so a sibling build worktree's ledger and its branch disagree. A committed root
+  resolved from the current worktree (via `build-memory`'s `memory-root.sh`) fixes this by construction.
+
+So in a repo that opts in (a `docs/build/README.md` marker), `decompose-spec` seeds the **committed** layout the
+`build-memory` skill owns: contracts under `docs/tickets/` (browsable beside the spec), the state-only ledger at
+`docs/build/LEDGER.md`, ADRs under `docs/adr/`. A repo that never opts in keeps the gitignored scratch behaviour
+unchanged. The layout earns its place on four grounds:
 
 - **The per-ticket file is the §2 logic applied to the contract itself.** A fresh worker's working set should
   start at one small file — not a scan of a monolithic ledger for its slice.
 - **Cite-don't-copy prevents spec forking.** A contract that restates the design diverges from the spec at the
   first amendment; citing sections + requirement IDs keeps the spec the single source of truth, with a manifest
-  log recording each amendment applied.
-- **Requirement-ID stamping makes coverage checkable** — at plan time (every in-scope ID → exactly one ticket)
-  and at review time (the PR lists the IDs it satisfies).
-- **Real chains contain non-code work.** Human prerequisites (accounts, outreach) and pre-registered milestone
-  gates (a hard barrier, a go/no-go criterion) belong *in* the ordered plan — as marked non-ticket rows — or the
-  chain silently blocks on them.
+  `## Spec amendments applied` log recording each amendment.
+- **Requirement-ID stamping makes coverage checkable** — at plan time (every in-scope ID → exactly one ticket,
+  validated by `check-build-memory.sh`) and at review time (the PR lists the IDs it satisfies).
+- **Real chains contain non-code work.** Human prerequisites and pre-registered milestone gates are marker files
+  *in* the ordered plan — or the chain silently blocks on them.
 
-The ledger is still seeded and remains the machine truth for `orchestrate-build`; the manifest is the human
-truth for the manual floor. Same plan, two projections.
+The ledger is the machine truth for `orchestrate-build`; the manifest is the human truth for the manual floor.
+Same plan, two projections — and in committed mode both travel with the chain tip. The tree itself is defined
+once in `skills/build-memory/layout.md`, which this skill cites rather than restates.
 
 ## 8. Honest limitations
 
@@ -127,6 +134,9 @@ truth for the manual floor. Same plan, two projections.
   approximates with judgment + one adversarial pass, not a solver. Two runs may legitimately differ.
 - **Garbage in.** A spec with no derivable design cannot be decomposed — the skill hard-stops rather than
   inventing one.
+- **Committed mode is opt-in.** The committed layout activates only on a `docs/build/README.md` marker; a repo
+  that has not opted in gets the gitignored scratch behaviour, so the coverage/sequence validation and the
+  worker-closes-its-own-ledger discipline are not enforced there.
 
 ## References
 

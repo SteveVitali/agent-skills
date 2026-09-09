@@ -48,18 +48,40 @@ The full design rationale, with the literature behind each phase, is in
 
 ## The skills around it
 
-Seven more skills stand alongside it — two scale it across sessions, the rest
-review, answer, and document:
+Ten more skills stand alongside it — five cover the multi-session build lifecycle, three review
+and answer, two document:
 
 | Skill | Purpose |
 |---|---|
-| [`decompose-spec`](skills/decompose-spec/SKILL.md) | Split one large spec into the fewest self-contained tickets that each fit a single fresh context, and seed a durable build ledger — the planning half of a multi-session build |
-| [`orchestrate-build`](skills/orchestrate-build/SKILL.md) | Drive that ledger to completion: run each ticket through `implement-spec` in a fresh context, report progress, pause for intervention, finish with a whole-build capstone — the execution half |
+| [`synthesize-spec`](skills/synthesize-spec/SKILL.md) | Turn a brief into a ratified, decomposable spec: a research ledger executed in fresh contexts, then synthesis, adversarial review, and operator ratification — the upstream half |
+| [`decompose-spec`](skills/decompose-spec/SKILL.md) | Split one large spec into the fewest self-contained tickets that each fit a single fresh context, and seed the committed build memory — the planning half of a multi-session build |
+| [`orchestrate-build`](skills/orchestrate-build/SKILL.md) | Drive that chain to completion: run each ticket through `implement-spec` in a fresh context, report progress, pause for intervention, finish with the standard tail — the execution half |
+| [`build-memory`](skills/build-memory/SKILL.md) | Owns the committed build-memory layout (`docs/build/`, `docs/tickets/`, `docs/adr/`), templates, validator, and legacy-scratch migration — the shared layer the build skills cite |
+| [`reconcile-build`](skills/reconcile-build/SKILL.md) | The closeout the tail tickets invoke: one complete backlog + operational readiness, spec reconciliation, and a read-only integration plan |
 | [`self-review`](skills/self-review/SKILL.md) | Two-pass review of your own branch, pre-PR: mechanical verification, then independence-preserving design critique |
 | [`review-pr`](skills/review-pr/SKILL.md) | Review someone else's PR: CI/verification grounding, focused design + security passes, calibrated severities, high-precision inline comments |
 | [`address-pr-comments`](skills/address-pr-comments/SKILL.md) | Work through review feedback on your PR: triage every thread, fix or push back with evidence, reply with commit links |
 | [`agent-docs`](skills/agent-docs/SKILL.md) | Bootstrap or refresh the AGENTS.md hierarchy — the agent-facing knowledge layer |
 | [`refresh-repo-docs`](skills/refresh-repo-docs/SKILL.md) | Audit and sync human-facing docs (README, docs/, examples) against the code |
+
+### The build lifecycle, end to end
+
+A large build runs as a chain of stages, each owned by a skill and leaving a committed artifact
+the next stage reads:
+
+| Stage | What happens | Owning skill(s) |
+|---|---|---|
+| S0 Brief | the founding prompt is captured (`docs/brief.md`) | operator / `synthesize-spec` |
+| S1–S3 Research → spec | research ledger rows executed in fresh contexts; the spec synthesized, reviewed, and **ratified** | [`synthesize-spec`](skills/synthesize-spec/SKILL.md) |
+| S4 Decomposition | the ratified spec split into a dependency-ordered ticket chain; build memory seeded | [`decompose-spec`](skills/decompose-spec/SKILL.md) + [`build-memory`](skills/build-memory/SKILL.md) |
+| S5 Build | each ticket run end-to-end in a fresh context; the worker closes its own ledger | [`orchestrate-build`](skills/orchestrate-build/SKILL.md) → [`implement-spec`](skills/implement-spec/SKILL.md) |
+| S6 Capstone | whole-build gap analysis → composed verification → closure → operator sign-off, as tail tickets | `CAP.*` / `GATE-ACCEPT` tickets |
+| S7 Reconciliation | one backlog + readiness, spec reconciliation, integration plan | [`reconcile-build`](skills/reconcile-build/SKILL.md) (via `REC.*`) |
+| S8 Docs | human-facing and agent-facing docs converged with the code | [`refresh-repo-docs`](skills/refresh-repo-docs/SKILL.md) + [`agent-docs`](skills/agent-docs/SKILL.md) (via `DOC.*`) |
+| S9 Next round | backlog + decision memo seed the next planning round | [`reconcile-build`](skills/reconcile-build/SKILL.md) → [`decompose-spec`](skills/decompose-spec/SKILL.md) `mode=extend` |
+
+Every stage's state is **committed** under `docs/` (the layout is
+[`skills/build-memory/layout.md`](skills/build-memory/layout.md)); only regenerable logs are gitignored.
 
 ### The multi-session build
 
@@ -165,11 +187,16 @@ authenticated [GitHub CLI](https://cli.github.com) (`gh`).
 
 ```
 .claude-plugin/                # plugin + marketplace manifests (Claude Code)
+CHANGELOG.md                   # notable changes, by plugin version
 skills/<skill-name>/
 ├── SKILL.md             # entry point (Agent Skills format: frontmatter + steps)
 ├── README.md            # design rationale (where it exists)
+├── layout.md            # shared reference contract (build-memory owns the build layout)
 ├── modes/               # mode-specific step files, loaded on demand (where applicable)
 ├── scripts/             # supporting shell helpers (bash 3.2+ compatible)
+├── templates/           # artifact templates a skill instantiates (e.g. build-memory)
+├── tests/               # fixture repos + run-tests.sh self-test (e.g. build-memory)
+├── guidelines.md        # shared authoring guidelines (where a skill owns one)
 └── checklists/          # supporting checklists / shared reference docs (where applicable)
 ```
 
@@ -194,6 +221,37 @@ progressive-disclosure material referenced from its `SKILL.md`.
   and checklists load only when needed.
 - **Proportional rigor** — every heavyweight phase is opt-out, so a one-line
   fix doesn't pay a ten-phase tax.
+- **Commit by audit value, ignore only regenerable bulk** — a multi-session
+  build's memory (tickets, ledger, ADRs, run records) is committed under
+  `docs/`; only regenerable logs are gitignored. Deriving something means
+  checking it with a script, never maintaining it by hand.
+
+## Upgrading from 0.1
+
+0.2.0 adds **committed build memory** and is **backward-compatible**: a repo
+opts in only by the presence of `docs/build/README.md` containing
+`<!-- build-memory: v2 -->`. A repo without that marker runs in **legacy
+scratch mode** — byte-for-byte the 0.1.0 behaviour (gitignored ledgers under
+`.agents/scratch/`, the old `tickets_dir` default), and every existing input
+keeps its name and default.
+
+To adopt the committed layout in a repo:
+
+- **A fresh build** — `decompose-spec` calls `build-memory init` during
+  seeding; nothing extra to do.
+- **An existing repo** — invoke `build-memory` `init` to write the layout
+  (idempotent; never clobbers a file), then `check` to validate.
+- **An in-flight build with a legacy `.agents/scratch/`** — invoke
+  `build-memory` `migrate` (dry-run by default; `apply=true` to perform). It
+  moves run ledgers → `docs/build/runs/<ID>.md`, PR bodies/tools/fixtures into
+  place, converts the machine ledger to `docs/build/LEDGER.md`, and records the
+  rename mapping — move/rename only, contents byte-identical, history never
+  renamed. Legacy ledgers still drive; on `nextTicket: CAPSTONE` a legacy
+  ledger converts to the tail via `decompose-spec mode=extend`.
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the full 0.2.0 list and
+[`skills/build-memory/layout.md`](skills/build-memory/layout.md) for the layout
+contract.
 
 ## Authoring a new skill
 
