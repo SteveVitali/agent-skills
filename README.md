@@ -1,7 +1,7 @@
 # agent-skills
 
 Rigorous engineering process for AI coding agents, packaged as portable
-[Agent Skills](https://agentskills.io): implement a spec end to end to a
+[Agent Skills](https://agentskills.io): implement a spec end-to-end to a
 verified PR, review code with independent judgment — your own branch, or
 anyone's PR — work through review feedback like a professional author, and
 keep documentation (agent-facing and human-facing) converged with the code
