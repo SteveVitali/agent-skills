@@ -1,2 +1,5 @@
 .idea/
 .DS_Store
+
+# Agent scratch / unpublished design documents (never committed: they cite private repos)
+.agents/

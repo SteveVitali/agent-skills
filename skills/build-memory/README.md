@@ -72,7 +72,9 @@ exit-code-gated and runnable in CI.
 
 ## References
 
-- The originating analysis: `long-horizon-memory-structures.md` (§4 gaps, §6 proposal).
+- The originating analysis (`long-horizon-memory-structures.md`, §4 gaps G1-G18, §6 proposal) and the
+  v2 specification derived from it are internal design documents held outside this repository; every
+  requirement they fix is restated normatively in [`layout.md`](layout.md).
 - ADR-058 (Eleutheria): tickets and build memory are committed; agent scratch is unified.
 - The layout contract and every `BM-*` requirement it encodes: [`layout.md`](layout.md).
 - The skills that consume it: `decompose-spec`, `orchestrate-build`, `implement-spec`,
