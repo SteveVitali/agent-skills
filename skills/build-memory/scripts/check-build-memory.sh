@@ -14,13 +14,15 @@
 #
 # Checks (each violation names the file and the rule):
 #   - layout: only the named entries at the root of docs/build/; logs/.gitignore present
-#   - ticket filenames: grammar (NN[a-z]?_<ID>__<slug>.md) + unique sequence keys;
+#   - ticket filenames: grammar (NN[a-z]?_<ID>__<slug>.md) + unique ids (an inserted sub-ticket
+#     may share the numeric prefix of another, e.g. 16_P0.15 / 16_P0.15b, as long as the id differs);
 #     a legacy filename is accepted when the manifest chain table lists it
 #   - manifest <-> files: every chain row has a file; every ticket file has a chain row
 #     (companions excepted); every HUMAN/GATE marker is a chain row
 #   - Depends on: only points backward (no forward dependency)
 #   - skeletons: Kind: skeleton has NO Run: line
-#   - DEFERRALS.md: ids unique; statuses in {OPEN,PARTIAL,DONE,WONTFIX,ACCEPTED-SKELETON};
+#   - DEFERRALS.md: ids unique; a canonical status {OPEN,PARTIAL,DONE,WONTFIX,ACCEPTED-SKELETON}
+#     appears as a word in each row's last cell (markdown/prose around it tolerated);
 #     no OPEN row scoped to a gate whose readout says PASSED
 #   - ADRs: files <-> generated index (regenerate + diff); every ADR has ## Revisit trigger;
 #     spec ADR appendix equals the file set when a spec+appendix is resolvable
@@ -138,7 +140,10 @@ if [ -d "$TICKETS" ]; then
       key="$(printf '%s' "$b" | sed -E 's/^([0-9]{2,3}[a-z]?)_.*$/\1/')"
       id="$(printf '%s' "$b" | sed -E "s/^[0-9]{2,3}[a-z]?_(${ID_RE})__.*$/\1/")"
       num="$(printf '%s' "$key" | sed -E 's/[a-z]$//')"
-      printf '%s\t%s\n' "$key" "$b" >> "$SEQ_KEYS"
+      # Dedup on the ticket ID, not the numeric prefix: a project may legitimately land several
+      # inserted sub-tickets under one prefix distinguished by an ID suffix (e.g. 16_P0.15,
+      # 16_P0.15b, 16_P0.15c). The real invariant is a unique ID, not a unique NN prefix.
+      printf '%s\t%s\n' "$id" "$b" >> "$SEQ_KEYS"
       printf '%s\t%s\t%s\n' "$id" "$num" "$b" >> "$ID_SEQ"
       in_chain "$b" || viol manifest "ticket file $b has no row in the manifest chain table"
     else
@@ -153,10 +158,10 @@ if [ -d "$TICKETS" ]; then
       fi
     fi
   done
-  # duplicate sequence keys
+  # duplicate ticket ids (the sequence invariant: no two ticket files declare the same id)
   if [ -s "$SEQ_KEYS" ]; then
     cut -f1 "$SEQ_KEYS" | sort | uniq -d | while IFS= read -r dup; do
-      [ -n "$dup" ] && viol sequence "duplicate ticket sequence key '$dup' (two files share the same NN[a-z]? prefix)"
+      [ -n "$dup" ] && viol sequence "duplicate ticket id '$dup' (two ticket files declare the same id)"
     done
   fi
 fi
@@ -213,12 +218,21 @@ if [ -f "$DEF" ]; then
   # table rows whose first cell is an id like D-<TICKET>-<n>
   grep -E '^\|[[:space:]]*D-' "$DEF" | while IFS= read -r row; do
     id="$(printf '%s' "$row" | sed -E 's/^\|[[:space:]]*//; s/[[:space:]]*\|.*$//')"
-    status="$(printf '%s' "$row" | sed -E 's/[[:space:]]*\|[[:space:]]*$//' | awk -F'|' '{print $NF}' | sed -E 's/^[[:space:]]*//; s/[[:space:]].*$//' | tr 'a-z' 'A-Z')"
+    # The status is the first canonical token appearing (as a whole word) in the last cell,
+    # tolerating markdown emphasis and status prose (e.g. "**PARTIAL (date):** …" or a migrated
+    # cell like "…DONE…; OPEN for a live fixture"). Hyphens are kept so compound words like
+    # ROOT-CAUSED don't spuriously match a canonical token.
+    lastcell="$(printf '%s' "$row" | sed -E 's/[[:space:]]*\|[[:space:]]*$//' | awk -F'|' '{print $NF}' | tr 'a-z' 'A-Z')"
+    toks=" $(printf '%s' "$lastcell" | sed -E 's/[^A-Z-]+/ /g') "
+    status=""
+    for cand in OPEN PARTIAL DONE WONTFIX ACCEPTED-SKELETON; do
+      case "$toks" in *" $cand "*) status="$cand"; break ;; esac
+    done
     printf '%s\n' "$id" >> "$DEF_IDS"
-    case "$VALID_STATUS" in
-      *" $status "*) : ;;
-      *) viol deferrals "DEFERRALS row $id has an invalid (orphan) status '$status'" ;;
-    esac
+    if [ -z "$status" ]; then
+      shown="$(printf '%s' "$lastcell" | sed -E 's/^[^A-Za-z]*//; s/[^A-Za-z-].*$//')"
+      viol deferrals "DEFERRALS row $id has an invalid (orphan) status '$shown'"
+    fi
   done
   if [ -s "$DEF_IDS" ]; then
     sort "$DEF_IDS" | uniq -d | while IFS= read -r dup; do

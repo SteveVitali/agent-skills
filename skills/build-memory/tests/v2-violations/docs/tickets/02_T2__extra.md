@@ -1,12 +1,12 @@
-# T3 — extra (duplicate sequence key 02)
+# T2 — extra (duplicate ticket id T2)
 
 - **Sequence:** 2 of 2 · **Phase:** wiring · **Kind:** ticket · **base_branch:** current checkout
 - **Depends on:** nothing
-- **Run:** `implement-spec spec=docs/tickets/02_T3__extra.md`
+- **Run:** `implement-spec spec=docs/tickets/02_T2__extra.md`
 - **Gate status:** none · **Live stage:** offline-only
 
 ## Goal
-Seeds a duplicate `02_` sequence key alongside 02_T2.
+Seeds a duplicate ticket id — declares `T2` alongside 02_T2__wire-consumers.md (two files, same id).
 
 ## Load (read these — do not re-read others)
 - none
@@ -27,4 +27,4 @@ BM-DEMO-03.
 - none.
 
 ## Notes
-Fixture violation: duplicate sequence.
+Fixture violation: duplicate ticket id.

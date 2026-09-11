@@ -24,7 +24,7 @@ Run line: `implement-spec spec=docs/tickets/<file>`. `orchestrate-build` drives 
 |---|---|---|---|---|---|
 | 1 | `01_T1__seed-schema.md` | schema | ticket | seed the schema | — |
 | 2 | `02_T2__wire-consumers.md` | wiring | ticket | wire the consumers | — |
-| 2 | `02_T3__extra.md` | wiring | ticket | duplicate sequence fixture | — |
+| 2 | `02_T2__extra.md` | wiring | ticket | duplicate ticket-id fixture | — |
 | 3 | `03_T5__skeleton.md` | post-gate | skeleton | post-gate placeholder | — |
 
 ## Milestone gates
