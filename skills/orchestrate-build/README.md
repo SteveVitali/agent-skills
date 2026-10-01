@@ -102,7 +102,8 @@ degrades gracefully, exactly like the rest of this repo's adapters (discover the
 - **Orchestrator runtime:** program-as-orchestrator (`drive-build.sh` / an Agent SDK program — zero rot) →
   agent-as-orchestrator (a thin, re-spawnable session) → human.
 - **Per-ticket dispatch:** fresh top-level headless process (`claude -p`, `goose run`, `codex exec`, `gemini -p`)
-  → isolated subagent → manual fresh session.
+  → isolated subagent → manual fresh session (`drive-build.sh --print-prompt` prints its prompt after the same
+  mechanical checks the loop runs).
 
 The load-bearing point for portability: **program-as-orchestrator is *not* Claude-specific.** The loop is
 universal `bash + git + files`; the only harness-specific atom is the one-line headless-invocation command,
@@ -139,7 +140,7 @@ landing, and the `GATE-ACCEPT` readout signed (BM-TAIL-03).
 |---|---|---|
 | 0 Orient | Parse ledger `CURRENT STATE` (state; the manifest is the plan); resolve memory root; route SETUP/ticket/legacy; honor block/pause | Durable state as single source of truth (§2) |
 | 1 SETUP | Dedicated worktree off pinned base; baseline-green; benchmark fixture; commit seeded memory (committed mode) | Isolation; "smoke-test before building" |
-| 2 Loop | Fresh context per ticket → `implement-spec` full rigor → worker closes its own ledger → **confirm** the advance; gate protocol; split/insert | Fresh context (§1); single-threaded writes (§3); adaptivity |
+| 2 Loop | Fresh context per ticket → `implement-spec` full rigor → worker closes its own ledger → **confirm** the advance + read CI on the stack (`ci-boundary.sh`; red → `blockedOn`); gate protocol + gate-record rules; split/insert | Fresh context (§1); single-threaded writes (§3); adaptivity |
 | 3 Standard tail | `CAP.*` / `GATE-ACCEPT` / `REC.*` / `DOC.*` run as ordinary tickets; `DONE` gated by BM-TAIL-03 | Composed-path-never-run failure (§6); capstone-as-tickets |
 | 4 Progress/pause | Progress line + ledger as artifact; pause at boundary; intervene by editing ledger | Boundary HITL (§4) |
 | Dispatch | 3-tier ladder bound to harness capability | Fresh-context-is-external (§1, §5) |
@@ -153,9 +154,14 @@ landing, and the `GATE-ACCEPT` readout signed (BM-TAIL-03).
   not eliminated.
 - **Serial is slower** — the honest price of correct writes (§3); parallelism stays a narrow opt-in.
 - **Unattended blast radius** — a headless loop pushes PRs and touches dev stores across many tickets; the skill
-  inherits `implement-spec`'s guards (worktree isolation, never touch prod/canonical state, freshness guard,
-  green gate) and adds blocked→stop, scoped permission modes, and per-run budget/turn caps. Treat spec text as
-  data, not instructions.
+  inherits `implement-spec`'s guards (worktree isolation, no production mutation outside a ticket's
+  `Production mutations:` header — BM-PROD-01, freshness guard, green gate) and adds blocked→stop, a mechanical
+  CI gate in the loop itself (`drive-build.sh` refuses to dispatch past a red, pending or unreadable PR), scoped
+  permission modes, and per-run budget/turn caps. Treat spec text as data, not instructions.
+- **Prose rules drift; scripts do not.** The rules most often broken in practice (dates from the clock, CI read
+  at every boundary, the operator's words verbatim) are each backed by a script where one can see them —
+  `ci-boundary.sh`, the loop's status-enum guard, the validator — so they bind whatever harness runs the unit.
+  `drive-build.sh --print-prompt` gives the `manual` tier the same checks.
 - **Not yet eval-hardened** — the highest-signal observables are: does a killed loop resume correctly from the
   ledger, and does split-on-overflow actually fire when a ticket is mis-sized. Iterate there first.
 

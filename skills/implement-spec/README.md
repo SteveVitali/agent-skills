@@ -159,8 +159,10 @@ for how a document like this should be written:
   of Phases 3–5 — and **bounded iterations** (max 3 per loop here) prevent the unproductive
   self-refinement spirals that the self-correction literature predicts for intrinsic-feedback loops.
 - **Avoid offering too many options:** one default path, few conditionals. `implement-spec`'s
-  "deliberate omissions" section (no merge-main, no CI polling, no Slack) is this principle applied
-  to scope: those concerns compose on top; they are not on the critical path.
+  "deliberate omissions" section (no merge-main, no out-of-scope CI fixing, no Slack) is this principle
+  applied to scope: those concerns compose on top; they are not on the critical path. Reading CI after
+  the push *is* on it (since 0.4.0): a run that reports green on local results alone is the failure the
+  evidence report exists to prevent.
 
 ### 2.7 Spec-driven development: where this skill sits
 

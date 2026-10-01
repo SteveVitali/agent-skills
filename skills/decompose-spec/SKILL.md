@@ -104,8 +104,8 @@ seams and dependencies.
 **In `mode=extend`** (a re-planning round on an existing build), also read the current build state before
 cutting: `docs/build/LEDGER.md` (what has landed, `chainTip`, `round`), `docs/tickets/DEFERRALS.md` (owed work
 that a new round may close), `docs/research-ledger.md` §Q (operator decisions), and `docs/build/BACKLOG.csv`
-(carried debt). Also read the open stack's CI state (`ci-boundary.sh --no-wait` — BM-CI-01, *forward: SK-01*;
-until it ships, `gh pr checks` on each open chain PR) and the latest operator digest under
+(carried debt). Also read the open stack's CI state (`orchestrate-build/scripts/ci-boundary.sh --ledger
+docs/build/LEDGER.md --stack --no-wait` — BM-CI-01) and the latest operator digest under
 `docs/build/reports/digests/` if one exists (*forward: SK-08*), so a round is never planned on top of red PRs. The
 new round's tickets fork from the current `chainTip`; you open a new numbered round banner in the manifest's chain
 table, append under it and to `## Plan extensions`, and never rename an existing ticket file (BM-COMPAT-05).

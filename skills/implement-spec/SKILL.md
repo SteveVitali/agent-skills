@@ -144,12 +144,13 @@ git rev-parse HEAD          # base tip you branched from
 4. **In committed mode, read the build-memory contract for this run.** Read the `AGENTS.md` "Build memory"
    section, then **`docs/tickets/DEFERRALS.md` first** — a deferral not in that file did not happen, and closing
    any `OPEN` row this ticket (or a landed prerequisite it depends on) unblocks is **in scope** for this run
-   (verify for real, then flip to `DONE` with date + evidence). Read the ticket's own header: `Depends on`,
-   `Gate status`, `Live stage`. **If the ticket is `Kind: skeleton`, STOP** — a skeleton has no runnable body
-   until its gate opens (BM-TICKET-03); report that and do nothing else. If the `Gate status` block has unticked
-   items, the operator's answers are in `docs/build/LEDGER.md` GATE DECISIONS — copy them into your first commit
-   and act on them; an answer of "skip" runs the ticket ungated and records the gated remainder as `DEFERRALS.md`
-   rows (the ticket is then listed in `RETURN PASS`). This step is inert in scratch mode.
+   (verify for real, then flip to `DONE` with the `date -u` date + evidence). Read the ticket's own header:
+   `Depends on`, `Gate status`, `Live stage`, `Production mutations`. **If the ticket is `Kind: skeleton`,
+   STOP** — a skeleton has no runnable body until its gate opens (BM-TICKET-03); report that and do nothing else.
+   If the `Gate status` block has unticked items, the operator's answers are in `docs/build/LEDGER.md` GATE
+   DECISIONS — copy them into your first commit and act on them; an answer of "skip" runs the ticket ungated and
+   records the gated remainder as `DEFERRALS.md` rows (the ticket is then listed in `RETURN PASS`). This step is
+   inert in scratch mode.
 
 ### 0.4 — Create the run ledger (durable state) *(skip if `ledger=false`)*
 
@@ -169,15 +170,32 @@ mkdir -p "$SCRATCH"   # must be gitignored; never commit ledger files
 LEDGER="$SCRATCH/implement-spec_${branch_name//\//-}_$(date +%Y%m%d).md"
 ```
 
-In committed mode the run ledger's sections follow `runs/<ID>.md` (BM-INDEX-02): `Spec / Base / Branch / Config`,
-`## Deferrals read`, `## Requirements`, `## Acceptance criteria`, `## Plan`, `## Test matrix`, `## Progress`,
-`## Gap table`, `## Evidence log`, `## Evidence report`. Seed it with: spec path, base commit, branch, and the
+In every mode the run ledger's header carries `Harness: <harness>/<model-id>/<tier>` (e.g.
+`devin-desktop/swe-2-high/manual`, `claude-code/claude-opus-5-5/headless` — what this session actually is),
+`Skills:` (the skills version you loaded, e.g. `git -C <skills root> rev-parse --short HEAD`, or `unknown`),
+`Started:` now and, at close, `Closed:` — both `date -u +%FT%TZ`. In committed mode the run ledger's sections
+follow `runs/<ID>.md` (BM-INDEX-02): `Spec / Base / Branch / Config` + those header lines, `## Deferrals read`,
+`## Requirements`, `## Acceptance criteria`, `## Plan`, `## Test matrix`, `## Progress`, `## Gap table`,
+`## Evidence log`, `## Evidence report`. Seed it with: spec path, base commit, branch, and the
 Phase 0.3 requirements + acceptance-criteria checklist;
 leave placeholder sections for the test matrix (1.4), the gap table (4.1), and the evidence log (5.4). Keep it
 current at every phase transition. The ledger is three things at once:
 - the **compaction-proof working checklist** for the whole run,
 - the **resume point** if the session dies (a fresh session reads ledger + `git log` and continues), and
 - the **seed of the Phase 6 evidence report**.
+
+### 0.5 — The clock rule (every mode; BM-CLOCK-01)
+
+Every date or time you write comes from `date -u` **at the moment of writing** (ISO-8601 `Z`; date-only fields
+take the UTC date), or from the git/GitHub time of the event it records with the source named
+(`(git 3f2a1c0 committer time)`). That covers run-ledger stamps, `updatedAt`, PHASE LOG lead dates, BUILD_INDEX
+`landed`, DEFERRALS status dates, ADR `Date:`, readout stamps, migration `planned_at`, and product constants that
+name an event. Never a "chain date" or "dated-entry convention", never "previous entry + 1 day", never a
+scenario or fixture date, never a date inferred from other records. A date later than now is a bug; a
+legitimately future value (a schedule, a deadline) carries
+`future-ok: <scheduled|real-world|synthetic|illustrative>: <reason>`. Before any time-triggered action, compare
+`date -u` with the live scheduler state, never with the latest recorded date. If the memory you read holds dates
+later than the clock, record that as a finding — do not continue their sequence.
 
 ---
 
@@ -349,7 +367,10 @@ through representative cases and observed the expected behavior."*
    and the empty/back-compat case — not just the happy path. These scenarios are your live test matrix.
 3. **Interact agentically to exercise each case.** Do whatever drives the behavior: HTTP requests, one-off
    scripts, CLI commands, seeding a scratch fixture, triggering the real flow. **Never mutate production /
-   canonical state and never trigger paid/expensive operations** — use throwaway/tagged test fixtures. "Local"
+   canonical state** unless the ticket's `Production mutations:` header names that exact mutation (BM-PROD-01;
+   no header means none). Then run it only through the scripted path the header names, after recording the
+   pre-state and the rollback command in the run ledger. Never trigger a paid or expensive operation the header
+   does not name. Otherwise use throwaway/tagged test fixtures. "Local"
    services often still hit shared dev datastores: record every fixture/record you create in shared stores in
    the ledger as you create it, and clean up from that list at the end — not from memory.
 4. **Verify by inspecting every useful signal.** Confirm the observed result against the expectation using
@@ -407,7 +428,7 @@ git diff --cached --quiet || git commit -m "<descriptive message: what changed +
 git push -u origin "$branch_name"
 ```
 
-### 6.3 — Open PR (no merge-main, no CI-poll, no Slack — see "does NOT do")
+### 6.3 — Open PR (no merge-main, no Slack — see "does NOT do"; CI is read in 6.5 step 0)
 In committed mode, write the PR body to `docs/build/pr/<ID>.md` first (it is the submitted body, committed with
 the change) and create the PR with `--body-file`, so the proof lives in the tree, not only on GitHub:
 ```bash
@@ -437,24 +458,46 @@ the evidence report is **also** the `## Evidence report` section of `runs/<ID>.m
    outcomes; explicitly list anything not run and why.
 5. **Deviations/deferrals** (if any): where the implementation intentionally differs from the spec, with the
    rationale.
+6. **CI:** the `ci:` line from 6.5 step 0 (in scratch mode, read it the same way) — `pass`, `locally-green`,
+   `none-declared`, or the not-green line. A ticket is never reported green on local results alone.
 
 ### 6.5 — Close the ticket *(committed mode, when the spec is a chain ticket)*
 When this run implemented a **chain ticket** — detected by a `Sequence:` header on the ticket plus a
 `docs/build/LEDGER.md` in the resolved root — the worker closes its own ticket (BM-INDEX-01, and D4 of the
-build-memory design: on the manual floor there is no orchestrator to advance the ledger). After the PR is up:
+build-memory design: on the manual floor there is no orchestrator to advance the ledger). After the PR exists,
+in **one** closeout commit:
 
+0. **Read CI on the pushed code head (BM-CI-01).** `bash <skills>/orchestrate-build/scripts/ci-boundary.sh --pr
+   <n> --json <memoryRoot>/logs/ci-<ID>.json` (bounded wait; a repo hook `docs/build/tools/ci_boundary.*` runs
+   instead when present; without the script, `gh pr checks <n>` until no check is pending). Record its last line
+   as the run ledger's `ci:` field — `ci: <pass|pending|unknown|none-declared> #<n>@<sha7> (<check> <run-id>; …)`.
+   - Red, cancelled or a missing required check **this ticket caused** → fix it here, re-push, re-read.
+   - Red **inherited from the base** (the same check is red on the base PR's head:
+     `ci-boundary.sh --pr <base PR> --no-wait`) → append a PHASE LOG `blocked` entry, set
+     `blockedOn: CI fail on #<n> (<check>)`, do not advance `nextTicket`, and report **blocked** — the closeout
+     commit then carries only that entry, `blockedOn` and the run ledger (no BUILD_INDEX row, no advance). Never
+     fix it silently here and never relax a test.
+   - Pending after the wait, or unreadable → record `ci: pending …` / `ci: unknown …` with the script's detail
+     (never "green"); the orchestrator's next boundary read decides. Local results alone are `locally-green`.
 1. **`BUILD_INDEX.md` row** — append one row for this ticket:
-   `| seq | ticket | kind | branch | PR | base | landed | ADRs | deferrals opened → closed | live verification (run / fixture-only / n-a / gate-pending) | evidence |`,
-   `evidence` pointing at `runs/<ID>.md#evidence` or `pr/<ID>.md`.
-2. **`LEDGER.md`** — advance `CURRENT STATE` (`lastCompleted: <ID>`, `nextTicket:` = the next chain row, bump
-   `updatedAt`, advance `chainTip` for a chained ticket) and append the fixed-shape `PHASE LOG` "done" entry
-   (branch · PR · base · summary · **Verify:** … · **Deferrals:** opened/closed ids · **Deviations:** … ·
-   chainTip → … · next → …). A pending gate is a `RETURN PASS` row, **not** a `blockedOn`.
-3. **Validate** — `bash skills/build-memory/scripts/check-build-memory.sh .` must exit 0; a failure is a real
-   block, not something to commit past.
-4. **Commit + push** the ledger advance as a **second, separate** commit:
+   `| seq | ticket | kind | branch | PR | base | landed | ADRs | deferrals opened → closed | live verification (run / fixture-only / n-a / gate-pending) | evidence |`
+   (+ a trailing `harness` cell where the table has that column), `landed` = `date -u +%F`, the `PR` cell the
+   real `#<n>` — never `PR pending` — and `evidence` pointing at `runs/<ID>.md#evidence` or `pr/<ID>.md`.
+2. **`LEDGER.md`** — advance `CURRENT STATE` (`lastCompleted: <ID>`, `nextTicket:` = the next chain row, set
+   `updatedAt` from `date -u`, advance `chainTip` for a chained ticket) and append the PHASE LOG "done" entry
+   **at the end of the file**, in the fixed shape with no markup before the kind, ≤ 2 KiB (details belong in
+   `runs/<ID>.md`): `- <date -u +%F> — <ID> done — branch · PR #<n> · base · summary · **Verify:** … ·
+   **Deferrals:** opened/closed ids · **Deviations:** … · chainTip → … · next → … · ci: … · layer: <BM-STATUS-01
+   word> · harness: …`. A pending gate is a `RETURN PASS` row, **not** a `blockedOn`. Protected records only gain
+   lines — GATE DECISIONS, PHASE LOG, DEFERRALS rows, readouts, BUILD_INDEX rows, executed contracts, ADR bodies
+   and `*.jsonl`; a correction is a new dated entry naming the sha and line it corrects.
+3. **Validate** — `bash skills/build-memory/scripts/check-build-memory.sh .` must exit 0 (any non-zero exit is a
+   real block, not something to commit past), plus the repo's own docs/memory check if its AGENTS.md names one.
+   *(forward: SK-16 — `check-build-memory.sh --staged` judges the staged closeout's added/removed lines.)*
+   Set the run ledger's `Closed:` from `date -u`.
+4. **Commit + push** the closeout as a **second, separate** commit:
    ```bash
-   git add docs/build/LEDGER.md docs/build/BUILD_INDEX.md
+   git add docs/build/LEDGER.md docs/build/BUILD_INDEX.md docs/build/runs/<ID>.md
    git commit -m "docs(build): close <ID>"
    git push
    ```
@@ -487,7 +530,8 @@ incomplete step. Never restart a partially-complete run from scratch.
 
 - **No merge-main.** Only merge base when there's a real conflict/stale CI; run your merge/conflict workflow
   separately if needed.
-- **No CI polling.** The push triggers CI; if it fails, invoke your fix-CI workflow separately.
+- **No CI fixing outside the ticket's scope.** CI is *read* after push (6.5 step 0). A red this ticket caused is
+  fixed here; a red it inherited is reported as blocked — never silently fixed or relaxed here.
 - **No chat/notification post.** Separate, human-invoked concern.
 - **No retention/cleanup of scratch fixtures beyond the run's own** — but DO clean up any test state you created
   in shared stores (Phase 5.3).
