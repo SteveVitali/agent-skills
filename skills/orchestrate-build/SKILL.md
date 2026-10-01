@@ -236,7 +236,7 @@ reports a pushed PR + evidence report, **confirm** rather than advance:
 4. **CI truth (BM-CI-01).** Read the checks of this ticket's PR at its current head and of every still-open
    ancestor PR in the stack: `bash <skills>/orchestrate-build/scripts/ci-boundary.sh --ledger <ledger> --ticket
    <ID> --stack --json <memoryRoot>/logs/ci-<ID>.json` (it runs a repo hook `docs/build/tools/ci_boundary.*`
-   instead when one exists). Exit 0 → its last line (`ci: pass #<n>@<sha7> (…)`, or
+   instead when one exists, forwarding `--ledger`, `--interval`, `--max-wait`/`--no-wait` when the hook names them). Exit 0 → its last line (`ci: pass #<n>@<sha7> (…)`, or
    `ci: none-declared (locally-green)`) is the `ci:` field of the ticket's PHASE LOG `done` entry and run ledger
    — the worker writes it at close (`implement-spec` §6.5 step 0); confirm it, and add it in the reconcile below
    if it is missing. Exit 3 (fail, cancelled, a required check missing), 4 (pending after the bounded wait) or
@@ -260,7 +260,7 @@ not a block.
 - If the worker reports it **overflowed its context / had to compact heavily / this was really two concerns**,
   the ticket was mis-sized: **split it.** Re-invoke `decompose-spec` on just this ticket's scope (same
   `dispatch_target`); write the sub-tickets as `<ID>a`/`<ID>b` files, mark the original `superseded-by-split` in
-  the manifest chain table (keep the original file), add a `## Plan extensions` line, and append a `split` PHASE
+  its manifest gate cell (keep the original file), add a `## Plan extensions` line, and append a `split` PHASE
   LOG entry.
 - To **insert** a ticket at run time, author its contract through `decompose-spec mode=extend` scoped to the
   insert (Phase 3 contract + Phase 4 fresh-context review) — never draft the next ticket ad hoc at a boundary.

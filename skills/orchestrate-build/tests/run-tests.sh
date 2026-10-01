@@ -203,6 +203,27 @@ test_ci_boundary() {
   newstub
   cib 4 repo-hook --pr 7 --worktree "$W3" --json "$W3/h.json"
   [ "$(cat "$W3/hook.args" 2>/dev/null)" = "--pr 7 --json $W3/h.json" ] || fail "ci-boundary repo-hook: args '$(cat "$W3/hook.args" 2>/dev/null)'"
+  # 0.5.1 (SEED-02b): --ledger / --interval / --max-wait / --no-wait reach a hook whose file names them; a hook
+  # that names none still gets exactly --pr <n> --json <path>, whatever the caller passed
+  cib 4 repo-hook-legacy --pr 7 --worktree "$W3" --ledger "$L3" --interval 5 --no-wait --json "$W3/h.json"
+  [ "$(cat "$W3/hook.args" 2>/dev/null)" = "--pr 7 --json $W3/h.json" ] || fail "ci-boundary repo-hook-legacy: a hook that names no flag got '$(cat "$W3/hook.args" 2>/dev/null)'"
+  printf '#!/usr/bin/env bash\n# usage: ci_boundary.sh --pr N --json P [--ledger PATH] [--interval S] [--max-wait S | --no-wait]\nprintf "%%s\\n" "$*" > "%s/hook.args"\nexit 0\n' "$W3" > "$W3/docs/build/tools/ci_boundary.sh"
+  cib 0 repo-hook-no-wait --pr 7 --worktree "$W3" --ledger "$L3" --no-wait --json "$W3/h.json"
+  [ "$(cat "$W3/hook.args" 2>/dev/null)" = "--pr 7 --json $W3/h.json --ledger $L3 --no-wait" ] || fail "ci-boundary repo-hook-no-wait: args '$(cat "$W3/hook.args" 2>/dev/null)'"
+  cib 0 repo-hook-wait --pr 7 --worktree "$W3" --interval 5 --max-wait 30 --json "$W3/h.json"
+  [ "$(cat "$W3/hook.args" 2>/dev/null)" = "--pr 7 --json $W3/h.json --interval 5 --max-wait 30" ] || fail "ci-boundary repo-hook-wait: args '$(cat "$W3/hook.args" 2>/dev/null)'"
+  cib 0 repo-hook-defaults --pr 7 --worktree "$W3" --json "$W3/h.json"
+  [ "$(cat "$W3/hook.args" 2>/dev/null)" = "--pr 7 --json $W3/h.json" ] || fail "ci-boundary repo-hook-defaults: unrequested flags forwarded '$(cat "$W3/hook.args" 2>/dev/null)'"
+  printf '#!/usr/bin/env bash\ncase "$*" in *--max-wait*) : ;; esac\nprintf "%%s\\n" "$*" > "%s/hook.args"\nexit 0\n' "$W3" > "$W3/docs/build/tools/ci_boundary.sh"
+  cib 0 repo-hook-max-wait-only --pr 7 --worktree "$W3" --no-wait --json "$W3/h.json"
+  [ "$(cat "$W3/hook.args" 2>/dev/null)" = "--pr 7 --json $W3/h.json --max-wait 0" ] || fail "ci-boundary repo-hook-max-wait-only: --no-wait not sent as --max-wait 0: '$(cat "$W3/hook.args" 2>/dev/null)'"
+  rm -f "$W3/docs/build/tools/ci_boundary.sh"
+  # 0.5.1: an empty description or link never shifts the next field (bash `read` merges adjacent tabs)
+  newstub; view 7 abc1234def; checks 7 "" "web${T}fail${T}$(run_url 333)${T}${T}CI"
+  cib 3 fail-no-description --pr 7 --worktree "$W" --no-wait && expect_last fail-no-description "blockedOn: CI fail on #7 (web): fail (run 333)"
+  newstub; view 7 abc1234def; checks 7 "" "python${T}pass${T}${T}${T}CI"
+  cib 0 pass-no-link --pr 7 --worktree "$W" --no-wait --json "$J"
+  grep -qF '"name":"python","bucket":"pass","run_id":"","link":"","waived":false' "$J" || fail "ci-boundary pass-no-link: the checks record shifted ($(grep -o '"checks":.*' "$J" | cut -c1-160))"
 
   # replay: B4's four recorded red heads (#141 36092963615, #165 36312594389, #179 36346856782,
   # #185 36467709050) — each must stop the chain (exit 3)

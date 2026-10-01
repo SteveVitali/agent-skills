@@ -37,7 +37,11 @@
 #   BM-GATE-05). An inherited red that reappears on a descendant PR needs that PR named too.
 # Repo hook: if <worktree>/docs/build/tools/ci_boundary.py, ci_boundary.sh or an executable
 #   ci_boundary exists, it runs instead with `--pr <n> --json <path>` and its exit code is passed
-#   through (it owns the required set, the stack and the wait).
+#   through (it owns the required set, the stack and the wait). The caller's `--ledger PATH`,
+#   `--interval S`, and `--max-wait S` / `--no-wait` are forwarded when given AND the hook's file
+#   names that flag (its usage text or argument parser) — a hook that names none gets exactly
+#   `--pr <n> --json <path>`. `--no-wait` falls back to `--max-wait 0` (and `--max-wait 0` to
+#   `--no-wait`) when the hook names only the other one.
 # No CI declared (no .github/workflows/*.y*ml, .gitlab-ci.yml, .circleci/config.yml,
 #   azure-pipelines.yml, bitbucket-pipelines.yml, .travis.yml, Jenkinsfile, .buildkite/, hook or
 #   ci_required.txt): exit 0, state none-declared — record `ci: none-declared (locally-green)`.
@@ -59,6 +63,7 @@
 set -uo pipefail
 
 PR="" ; LEDGER="" ; TICKET="" ; STACK=0 ; JSON="" ; WT="" ; INTERVAL=60 ; MAX_WAIT=2700
+INTERVAL_GIVEN=0 ; WAIT_GIVEN=""   # what the caller set explicitly — only that is forwarded to a repo hook
 
 usage() { awk 'NR > 1 && !/^#/ {exit} NR > 1 {sub(/^# ?/, ""); print}' "$0"; }   # the header only
 die_usage() { echo "ci-boundary.sh: $*" >&2; exit 1; }
@@ -71,9 +76,9 @@ while [ $# -gt 0 ]; do
     --stack)    STACK=1; shift ;;
     --json)     JSON="${2:-}"; shift 2 ;;
     --worktree) WT="${2:-}"; shift 2 ;;
-    --interval) INTERVAL="${2:-}"; shift 2 ;;
-    --max-wait) MAX_WAIT="${2:-}"; shift 2 ;;
-    --no-wait)  MAX_WAIT=0; shift ;;
+    --interval) INTERVAL="${2:-}"; INTERVAL_GIVEN=1; shift 2 ;;
+    --max-wait) MAX_WAIT="${2:-}"; WAIT_GIVEN=max; shift 2 ;;
+    --no-wait)  MAX_WAIT=0; WAIT_GIVEN=none; shift ;;
     -h|--help)  usage; exit 0 ;;
     *) die_usage "unknown arg: $1 (try --help)" ;;
   esac
@@ -147,12 +152,13 @@ emit() {
       printf '{"pr":%s,"head_sha":%s,"pr_state":%s,"state":%s}' "$p" "$(jstr "$sha")" "$(jstr "$prstate")" "$(jstr "$st")"
     done < "$PRS"
     printf '],"checks":['; first=1
-    while IFS="$(printf '\t')" read -r p n b l w; do
+    # \037, not <tab>: `read` merges adjacent tabs, so an empty link would shift `waived` into it
+    while IFS="$(printf '\037')" read -r p n b l w; do
       [ -n "$p" ] || continue
       [ "$first" -eq 1 ] || printf ','; first=0
       printf '{"pr":%s,"name":%s,"bucket":%s,"run_id":%s,"link":%s,"waived":%s}' "$p" "$(jstr "$n")" "$(jstr "$b")" \
         "$(jstr "$(printf '%s' "$l" | sed -nE 's#.*/actions/runs/([0-9]+).*#\1#p')")" "$(jstr "$l")" "${w:-false}"
-    done < "$CHECKS"
+    done < <(tr '\t' '\037' < "$CHECKS")
     printf '],"line":%s,"exit":%s}\n' "$(jstr "$line")" "$code"
   } > "$JSON"
   echo "ci-boundary: record → $JSON"
@@ -228,11 +234,22 @@ PR="${PR#\#}"
 
 # ── 3. Repo hook → delegate, pass the exit code through ──────────────────────
 if [ -n "$HOOK" ]; then
-  echo "ci-boundary: delegating to the repo hook $HOOK (--pr $PR --json $JSON)"
+  # The hook contract is `--pr <n> --json <path>`; an optional flag goes along only when the caller gave it
+  # and the hook's file names it (a hook written before these flags never receives one it would reject).
+  hook_names() { grep -qaE -- "(^|[^A-Za-z0-9_-])$1([^A-Za-z0-9_-]|\$)" "$HOOK" 2>/dev/null; }
+  HARGS=(--pr "$PR" --json "$JSON")
+  if [ -n "$LEDGER" ] && hook_names --ledger; then HARGS+=(--ledger "$LEDGER"); fi
+  if [ "$INTERVAL_GIVEN" -eq 1 ] && hook_names --interval; then HARGS+=(--interval "$INTERVAL"); fi
+  case "$WAIT_GIVEN" in
+    none) if hook_names --no-wait; then HARGS+=(--no-wait); elif hook_names --max-wait; then HARGS+=(--max-wait 0); fi ;;
+    max)  if hook_names --max-wait; then HARGS+=(--max-wait "$MAX_WAIT")
+          elif [ "$MAX_WAIT" -eq 0 ] && hook_names --no-wait; then HARGS+=(--no-wait); fi ;;
+  esac
+  echo "ci-boundary: delegating to the repo hook $HOOK (${HARGS[*]})"
   case "$HOOK" in
-    *.py) python3 "$HOOK" --pr "$PR" --json "$JSON" ;;
-    *.sh) bash "$HOOK" --pr "$PR" --json "$JSON" ;;
-    *)    "./$HOOK" --pr "$PR" --json "$JSON" ;;
+    *.py) python3 "$HOOK" "${HARGS[@]}" ;;
+    *.sh) bash "$HOOK" "${HARGS[@]}" ;;
+    *)    "./$HOOK" "${HARGS[@]}" ;;
   esac
   exit $?
 fi
@@ -297,7 +314,8 @@ read_pr() {
   fi
   rm -f "$err"
   local fail_l="" pend_l="" seen=0
-  while IFS="$(printf '\t')" read -r name bucket link desc wf; do
+  # \037, not <tab>: an empty link or description must not shift the next field into it
+  while IFS="$(printf '\037')" read -r name bucket link desc wf; do
     [ -n "$name" ] || continue
     seen=1
     local w=false
@@ -315,7 +333,7 @@ read_pr() {
       *) [ -n "$pend_l" ] || pend_l="${name}${TAB}$(printf '%s' "${desc:-pending}" | cut -c1-120)" ;;
     esac
   done <<EOF
-$out
+$(printf '%s\n' "$out" | tr '\t' '\037')
 EOF
   if [ -s "$REQUIRED" ]; then
     local r
