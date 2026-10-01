@@ -67,8 +67,13 @@ a terminal can execute. Only the *dispatch* step binds to harness capability.
   prints `mode=<committed|scratch>` and `root=<abs path>`. In **committed** mode the ledger is
   `<root>/LEDGER.md`, committed and travelling with the chain tip (a sibling worktree reads its own tip, not the
   main worktree's copy); in **scratch** mode it is the legacy gitignored ledger, unchanged.
+- **Orient within the budget (BM-ORIENT-01).** Never read `LEDGER.md`, `DEFERRALS.md` or `BUILD_INDEX.md`
+  whole: read the ledger head (`sed -n '1,/^## OPEN FINDINGS/p'`, ≤ 12 KiB), the current RETURN PASS table, the
+  last three PHASE LOG entries and the next row's manifest line + contract header (≤ 48 KiB in all), or the
+  recipe the ledger's OPERATING MODE gives. A head over budget, a path in it that does not exist, or a stale
+  token is a finding to surface before dispatch (the validator reports all three).
 - **Read `CURRENT STATE`** → `nextTicket`, `lastCompleted`, `blockedOn`, `pauseRequested`, `returnPass`,
-  `manifest`, `memoryRoot`, `chainTip`, `autonomy`. The `manifest:` key names the plan (`docs/tickets/00_MANIFEST.md`);
+  `manifest`, `memoryRoot`, `chainTip`, `autonomy`, `harness`. The `manifest:` key names the plan (`docs/tickets/00_MANIFEST.md`);
   the tickets themselves are the contracts the worker loads.
   - **Legacy ledger** (PHASE PLAN present, `manifest:` absent): drive it from its own PHASE PLAN. On
     `nextTicket: CAPSTONE`, run `decompose-spec mode=extend tail=full` to convert it to v2 (write the manifest
@@ -82,7 +87,14 @@ a terminal can execute. Only the *dispatch* step binds to harness capability.
   - `nextTicket: SETUP` → §1. Otherwise → §2 (the tail rows `CAP.*`, `REC.*`, `DOC.*` are ordinary chain
     tickets; there is no special CAPSTONE unit in v2 — see §3).
 - **Determine the dispatch tier** from `dispatch` (or auto-detect: `headless` if a supported agent CLI is on
-  PATH, else `subagent` if the harness exposes one, else `manual`). Record it.
+  PATH, else `subagent` if the harness exposes one, else `manual`).
+- **Record the harness identity (BM-HARNESS-01).** Write `<harness>/<model-id>/<tier>` (e.g.
+  `devin-desktop/swe-2-high/manual`) into CURRENT STATE `harness:` and into every run-ledger header, PHASE LOG
+  entry and BUILD_INDEX row this session writes; commits carry the harness's co-author trailer. If `harness:`
+  already names a different harness or model, this session is a **harness switch**: allowed only at a ticket
+  boundary, recorded as a PHASE LOG `harness-switch` entry (old → new, reason, the operator's words verbatim),
+  and the first ticket after it re-runs orient, the validator and the CI read before dispatch. A switch the
+  operator did not ask for → pause and ask.
 - **Check dispatch-vs-sizing coherence.** Read the ledger's `dispatchTarget` (what `decompose-spec` sized the
   tickets for). A `subagent` worker cannot compact, so it has a *hard* one-window ceiling; a `headless` worker
   can compact. If the tickets were sized for `headless` but you can only dispatch via `subagent`, they may
@@ -218,7 +230,9 @@ reports a pushed PR + evidence report, **confirm** rather than advance:
 1. The ledger's `CURRENT STATE` advanced (`lastCompleted` = this ticket, `nextTicket` = the next chain row,
    `chainTip` advanced for a chained ticket) and a fixed-shape `PHASE LOG` "done" entry was appended.
 2. `BUILD_INDEX.md` has this ticket's row and `docs/build/runs/<ID>.md` exists.
-3. `bash <skills>/build-memory/scripts/check-build-memory.sh .` exits 0.
+3. `bash <skills>/build-memory/scripts/check-build-memory.sh .` exits 0, and so does its history mode over
+   the ticket's commits, `check-build-memory.sh . --range <chainTip before the ticket>..<chainTip now>`
+   (BM-HIST-01: protected records only gained lines, at their ends, with dates from the clock).
 4. **CI truth (BM-CI-01).** Read the checks of this ticket's PR at its current head and of every still-open
    ancestor PR in the stack: `bash <skills>/orchestrate-build/scripts/ci-boundary.sh --ledger <ledger> --ticket
    <ID> --stack --json <memoryRoot>/logs/ci-<ID>.json` (it runs a repo hook `docs/build/tools/ci_boundary.*`
@@ -234,8 +248,10 @@ reports a pushed PR + evidence report, **confirm** rather than advance:
    (`git merge-base --is-ancestor`), PRs merged since the previous boundary (who, when) and open PRs that are not
    chain rows. An off-stack merge into the chain, or a chain PR rebased or retargeted by someone else →
    `blockedOn` (the operator decides).
-If any of 1–3 is missing (an older worker, a scratch-mode run, or an interruption), **reconcile it yourself**:
-make the advance, append the PHASE LOG entry with the acceptance evidence, and re-run the validator.
+If any of 1–3 is missing (an older worker, a scratch-mode run, or an interruption), repair it as a PHASE LOG
+`repair` entry that names the gap (`repair — close: <which item> (<worker harness>, why)`), then re-run the
+validator. Never back-fill a `done` entry for work you did not verify. A second close repair in the same round
+sets `blockedOn: worker close protocol broken (<ids>)`: fix the worker, not the symptom.
 **Never fabricate green.** If the worker blocked, self-review stayed red, CI is not green, or an agentic metric
 regressed: set `blockedOn`, record it, do NOT advance `nextTicket`, STOP. A pending gate is a `RETURN PASS` row,
 not a block.
@@ -246,8 +262,12 @@ not a block.
   `dispatch_target`); write the sub-tickets as `<ID>a`/`<ID>b` files, mark the original `superseded-by-split` in
   the manifest chain table (keep the original file), add a `## Plan extensions` line, and append a `split` PHASE
   LOG entry.
-- To **insert** a ticket at run time, use the next filename suffix letter (`16a_…`, `16b_…`), add its chain-table
-  row and a `## Plan extensions` line, and append an `inserted` PHASE LOG entry. Every inserted file is a
+- To **insert** a ticket at run time, author its contract through `decompose-spec mode=extend` scoped to the
+  insert (Phase 3 contract + Phase 4 fresh-context review) — never draft the next ticket ad hoc at a boundary.
+  Then use the next filename suffix letter (`16a_…`, `16b_…`), add its chain-table row under the current
+  numbered round banner and a `## Plan extensions` line, and append an `inserted` PHASE LOG entry. Work that
+  landed outside the loop (an interactive session, an off-stack PR) gets a `retroactive` chain row and run
+  ledger before anything else proceeds. Every inserted file is a
   chain-table row; a file in `docs/tickets/` that is neither a chain row nor a listed companion is a validator
   error.
 - If two adjacent unstarted tickets are trivially small and share context, you MAY merge them (record it in
@@ -292,9 +312,23 @@ For a **legacy** ledger with `nextTicket: CAPSTONE`, see §0's routing and
 
 ## 4. Progress + intervention
 
-- **Transparency.** After each boundary emit a concise line — `✅ T# complete — PR: <url> (<acceptance
-  evidence>) · <the §2.3 step-4 ci: field>. Next: <T#+1 | CAPSTONE>.` The ledger is the durable progress
-  artifact; a human can read it any time. In `headless` dispatch, stream the child's output for live monitoring.
+- **Transparency (BM-DIGEST-01).** After each boundary emit one line that names the layer reached, never just
+  "complete": `T# · PR #n · CI: pass|RED|pending|locally-green · layer: <BM-STATUS-01 word> · prod touched:
+  none|<what> · deferrals +k/−j · <date -u> · next: T#+1`. The ledger is the durable progress artifact; in
+  `headless` dispatch, stream the child's output for live monitoring.
+- **Operator digest.** At every pause, at session end, at every usage-limit event, and at the cadence the
+  ledger's OPERATING MODE names (e.g. once per wave: after the last row under a chain-table banner), run
+  `bash <skills>/orchestrate-build/scripts/digest.sh --ledger <ledger> --trigger <why> --write --production
+  "<what you read, what you found>" --spend "<figure + source | not tracked>" --usage "<runs; usage per run
+  (median, max); cumulative; projection; usage-limit events | not measured>"` and show the result. It appends
+  to `docs/build/reports/digests/<date -u +%F>.md` and reads the rest itself (harness, state, validator, the CI
+  of every open chain PR, merges by anyone since the last digest, owed human work). Never a secret value: if one
+  appeared in the transcript, pass `--exposed yes` and stop for rotation.
+- **Stop and ask** — set `blockedOn` or pause, never proceed — when: a required check is red; production
+  contradicts a record; a date is not from the clock; operator words are tentative or delegate a signature; a
+  pre-authorized step meets a new fact; a ticket would touch production outside its contract or rewrite a
+  protected record; human work would be deferred a second time; the harness or model would change; a usage
+  limit is hit. Silence is never consent.
 - **Pause.** The **ticket boundary is the only safe pause point** (git is clean, state is durable) — never pause
   mid-ticket. The human halts by setting `pauseRequested: true` in the ledger (honored at the next boundary), by
   a configured Nth-ticket checkpoint, or by interrupting the process (state is safe on disk). Resuming is just
@@ -339,7 +373,9 @@ inherit blanket write access by accident.
 ## Guardrails
 
 - **One ticket per fresh context.** The whole point; never batch tickets into one context.
-- **The ledger is the truth** — read first, write last; reconcile ledger-vs-reality explicitly on resume.
+- **The ledger is the truth** — read first (within the orient budget), write last; reconcile ledger-vs-reality
+  explicitly on resume, as dated entries — protected records only gain lines (BM-HIST-01).
+- **One harness per session, recorded** (BM-HARNESS-01); a switch only at a boundary, on the operator's words.
 - **Only touch the build worktree.** Respect the cross-cutting invariants and the out-of-scope list.
 - **Writes stay single-threaded** (`parallel=false` default). Parallelize only genuinely disjoint out-of-chain
   work; even then, the capstone reconciles the seams.

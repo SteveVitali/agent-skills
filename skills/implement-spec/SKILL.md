@@ -228,7 +228,8 @@ unambiguous.
 Translate **every** acceptance criterion into concrete planned tests *before implementing*: unit tests for pure
 logic, integration tests for the seams, live scenarios for runtime behavior (these become the 5.3 matrix). Write
 the matrix into the ledger. Deriving tests from the spec now — rather than from the finished code later — keeps
-them asserting *what the spec demands* instead of *what the implementation happens to do*.
+them asserting *what the spec demands* instead of *what the implementation happens to do*. The test matrix never
+plans a living-record pin (BM-TEST-01, §5.1).
 
 ### 1.5 — Confirmation gate
 - **`autonomous=true` (default):** do NOT pause. Record the plan (you'll include it in the final report) and
@@ -293,9 +294,16 @@ the ledger's list (catches extraction drift), then against the implementation (c
 For **every** requirement and **every** acceptance criterion from the spec, record a row **in the ledger's gap
 table**:
 
-| item (spec §) | status: met / partial / missed | evidence (file:line, symbol, test) | if partial/missed: why + the fix |
+| item (spec §) | required layer | achieved layer | status: met / met-engineered(D-id) / partial / missed | evidence (file:line, symbol, test) | if not met: why + the fix |
 
 Rules:
+- **Layers (BM-STATUS-01).** `required layer` is the AC's own tag (an untagged AC reads `engineered`);
+  `achieved layer` is what your evidence actually reached: `engineered` · `fixture-verified` ·
+  `staging-verified` · `live-executed` · `public`, plus `human-completed` (a human leg done by a human). `met`
+  holds only when the achieved layer reaches the required one and any human leg was done by a human; otherwise
+  the row is `met-engineered(D-id)`, citing an OPEN `DEFERRALS.md` row that names the owed leg. Fixtures and
+  stand-ins never carry retrieval or observation dates (they carry `capture_kind: stand-in`); no agent-produced
+  label is recorded as a human label.
 - **Evidence is mandatory for "met."** "I think I did that" is not met — cite the file:line/symbol/test that
   proves it. If you can't cite it, it's `partial` or `missed`.
 - Read the actual implemented code to confirm, don't trust memory of what you wrote.
@@ -343,6 +351,14 @@ Pass-2 test criteria). Any pure logic the spec
 introduces (algorithms, selectors, scorers, state machines) gets direct, deterministic tests over its real
 edge cases.
 
+**Invariants, not living records (BM-TEST-01).** A test asserts what holds at every commit — schema, vocabulary
+membership, uniqueness, generated == source, references resolve, append-only. It never asserts the *current
+value* of a living record: `nextTicket`, a project, readout or obligation status, or the counts, row ranges and
+dates of living registers (LEDGER, BUILD_INDEX, DEFERRALS, the coverage matrix, README/CHANGELOG wording); a
+validator derives expected counts from their source. When such a pin fails, convert it to an invariant or delete
+it in its own commit — never relax it in place. Assertions over frozen artifacts (a dated report, a closed
+round's plan) are fine, and the test says why.
+
 ### 5.2 — Integration
 Exercise the wired components end-to-end against the real seams the change touches (public interfaces, storage,
 config, cross-module calls) — not just the units in isolation. Assert the spec's integration acceptance criteria
@@ -383,9 +399,9 @@ through representative cases and observed the expected behavior."*
 **Gate-pending, never fabricated (committed mode, BM-DEFER-02).** When a live check cannot run because the
 ticket's `Live stage` is operator-gated (a budget the operator has not released) or the infrastructure is
 absent, do **not** fail and do **not** invent a pass: append a `DEFERRALS.md` row (its proxy now, what unblocks
-it, how to verify it when unblocked) and report **"gate pending"** for that criterion. The ticket still opens its
-PR; the gate-pending item is carried in `RETURN PASS` and the `BUILD_INDEX` "live verification" column reads
-`gate-pending`.
+it, how to verify it when unblocked) and report **"gate pending"** for that criterion — its gap-table row is
+`met-engineered(D-id)` at the layer you did reach, never `met`. The ticket still opens its PR; the gate-pending
+item is carried in `RETURN PASS` and the `BUILD_INDEX` "live verification" column reads `gate-pending`.
 
 ### 5.4 — Evidence capture + synthesis
 As you run each level, capture concrete evidence **in the ledger's evidence log** — the command/interaction and
@@ -449,9 +465,10 @@ The ledger is the source of truth — derive the report from it, don't reconstru
 the evidence report is **also** the `## Evidence report` section of `runs/<ID>.md` and the body of
 `pr/<ID>.md` — write it once, in the ledger, and reuse it. Return to the operator, in the final message:
 1. **PR link** (`gh pr view "$branch_name" --json url --jq '.url'`).
-2. **Acceptance-criteria table**: every AC from the spec → met/deferred → the concrete evidence (test output,
-   observed live behavior, file:line) that proves it. This is the gap table from Phase 4, now backed by Phase 5
-   evidence.
+2. **Acceptance-criteria table**: every AC from the spec → its required and achieved layer → met /
+   met-engineered(D-id) / deferred → the concrete evidence (test output, observed live behavior, file:line) that
+   proves it. This is the gap table from Phase 4, now backed by Phase 5 evidence; a fixture-only result never
+   reads `met` for a `live-executed` AC.
 3. **Gap-analysis summary**: gaps found after first implementation + how each was closed (shows the phase did
    real work).
 4. **Verification summary**: unit / integration / interactive results, with the commands run and headline
@@ -480,21 +497,26 @@ in **one** closeout commit:
    - Pending after the wait, or unreadable → record `ci: pending …` / `ci: unknown …` with the script's detail
      (never "green"); the orchestrator's next boundary read decides. Local results alone are `locally-green`.
 1. **`BUILD_INDEX.md` row** — append one row for this ticket:
-   `| seq | ticket | kind | branch | PR | base | landed | ADRs | deferrals opened → closed | live verification (run / fixture-only / n-a / gate-pending) | evidence |`
-   (+ a trailing `harness` cell where the table has that column), `landed` = `date -u +%F`, the `PR` cell the
-   real `#<n>` — never `PR pending` — and `evidence` pointing at `runs/<ID>.md#evidence` or `pr/<ID>.md`.
+   `| seq | ticket | kind | branch | PR | base | landed | ADRs | deferrals opened → closed | live verification | evidence |`
+   (+ a trailing `harness` cell where the table has that column), with exactly the header's cells (escape a `|`
+   inside a cell as `\|`), `landed` = `date -u +%F`, the `PR` cell the real `#<n>` — never `PR pending` —, `live
+   verification` one of `live-executed | staging | fixture-only | engineered | n-a | gate-pending`, and `evidence`
+   pointing at `runs/<ID>.md#evidence` or `pr/<ID>.md`.
 2. **`LEDGER.md`** — advance `CURRENT STATE` (`lastCompleted: <ID>`, `nextTicket:` = the next chain row, set
-   `updatedAt` from `date -u`, advance `chainTip` for a chained ticket) and append the PHASE LOG "done" entry
+   `updatedAt` from `date -u`, advance `chainTip` for a chained ticket; leave `harness:` as is when it already
+   names this session — a different value is a harness switch, recorded at orient (orchestrate-build §0), never
+   overwritten here) and append the PHASE LOG "done" entry
    **at the end of the file**, in the fixed shape with no markup before the kind, ≤ 2 KiB (details belong in
    `runs/<ID>.md`): `- <date -u +%F> — <ID> done — branch · PR #<n> · base · summary · **Verify:** … ·
    **Deferrals:** opened/closed ids · **Deviations:** … · chainTip → … · next → … · ci: … · layer: <BM-STATUS-01
    word> · harness: …`. A pending gate is a `RETURN PASS` row, **not** a `blockedOn`. Protected records only gain
    lines — GATE DECISIONS, PHASE LOG, DEFERRALS rows, readouts, BUILD_INDEX rows, executed contracts, ADR bodies
    and `*.jsonl`; a correction is a new dated entry naming the sha and line it corrects.
-3. **Validate** — `bash skills/build-memory/scripts/check-build-memory.sh .` must exit 0 (any non-zero exit is a
-   real block, not something to commit past), plus the repo's own docs/memory check if its AGENTS.md names one.
-   *(forward: SK-16 — `check-build-memory.sh --staged` judges the staged closeout's added/removed lines.)*
-   Set the run ledger's `Closed:` from `date -u`.
+3. **Validate** — set the run ledger's `Closed:` from `date -u`, stage the closeout (step 4's `git add`), then
+   `bash skills/build-memory/scripts/check-build-memory.sh .` and `check-build-memory.sh . --staged` (history mode,
+   BM-HIST-01: the staged lines only append, at the regions' ends, with dates from the clock) must both exit 0 —
+   any non-zero exit is a real block, not something to commit past — plus the repo's own docs/memory check if its
+   AGENTS.md names one.
 4. **Commit + push** the closeout as a **second, separate** commit:
    ```bash
    git add docs/build/LEDGER.md docs/build/BUILD_INDEX.md docs/build/runs/<ID>.md

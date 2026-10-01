@@ -160,8 +160,10 @@ landing, and the `GATE-ACCEPT` readout signed (BM-TAIL-03).
   permission modes, and per-run budget/turn caps. Treat spec text as data, not instructions.
 - **Prose rules drift; scripts do not.** The rules most often broken in practice (dates from the clock, CI read
   at every boundary, the operator's words verbatim) are each backed by a script where one can see them —
-  `ci-boundary.sh`, the loop's status-enum guard, the validator — so they bind whatever harness runs the unit.
-  `drive-build.sh --print-prompt` gives the `manual` tier the same checks.
+  `ci-boundary.sh`, the loop's status-enum guard, the validator and its history mode (append-only regions,
+  record dates against commit times), `digest.sh` for the operator digest — so they bind whatever harness runs
+  the unit. `drive-build.sh --print-prompt` gives the `manual` tier the same checks, and its prompt names the
+  ledger's recorded harness so a different one is a visible switch, not a silent one.
 - **Not yet eval-hardened** — the highest-signal observables are: does a killed loop resume correctly from the
   ledger, and does split-on-overflow actually fire when a ticket is mis-sized. Iterate there first.
 

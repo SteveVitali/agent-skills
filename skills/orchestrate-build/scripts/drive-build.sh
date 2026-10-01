@@ -158,7 +158,8 @@ if [ "$CI_GATE" = "auto" ]; then
   else CI_GATE=0; CI_NOTE="off (--skill $SKILL_NAME has no PR boundaries; --ci-gate forces it)"; fi
 elif [ "$CI_GATE" -eq 1 ]; then CI_NOTE="on"
 else CI_NOTE="OFF (explicit opt-out --no-ci-gate)"; fi
-echo "drive-build: ledger=$LEDGER"
+LEDGER_HARNESS="$(status_val harness)"
+echo "drive-build: ledger=$LEDGER harness(ledger)=${LEDGER_HARNESS:-<not recorded>}"
 echo "drive-build: agent=[${BASE_ARGV[*]}] yolo=$YOLO worktree=${WORKTREE:-<none>} logs=$LOG_DIR max-iters=$MAX_ITERS ci-gate=$CI_NOTE"
 
 # CI gate (BM-CI-01): the loop itself refuses to dispatch past a red, pending or unreadable PR.
@@ -212,6 +213,7 @@ for ((i = 1; i <= MAX_ITERS; i++)); do
     echo "── iter $i/$MAX_ITERS · unit: $NEXT ──────────────────────────────"
   fi
 
+  LEDGER_HARNESS="$(status_val harness)"
   PROMPT="You are a fresh session with no memory of prior sessions. Follow the $SKILL_NAME skill at \
 '$DRIVER_SKILL' (its sibling skills implement-spec, decompose-spec and build-memory are under '$SKILLS_ROOT'). \
 Operate on the ledger at '$LEDGER'. Execute EXACTLY ONE unit — the one named by the ledger's next-unit pointer \
@@ -221,7 +223,11 @@ ledger (advance CURRENT STATE, append a PHASE LOG entry) and STOP. Do NOT procee
 launch drive-build.sh — $CONTINUATION. Never fabricate green: on a REAL block set \
 blockedOn and stop; a pending gate is a RETURN PASS row, not a block. Every date you write comes from \
 \`date -u\` at that moment. Record your harness and model id as \`Harness: <harness>/<model-id>/$TIER\` in the \
-run-ledger header."
+run-ledger header. The ledger's CURRENT STATE \`harness:\` reads '${LEDGER_HARNESS:-<not recorded>}': if it names \
+a different harness or model than yours, you are a harness switch (BM-HARNESS-01) — allowed only at this boundary \
+and only on the operator's words: record a PHASE LOG \`harness-switch\` entry quoting them, or stop and ask. \
+Before you stop on a block, a gate or a usage-limit event, or after the last row under a chain-table banner, \
+write the operator digest (orchestrate-build §4, scripts/digest.sh)."
 
   if [ "$PRINT_PROMPT" -eq 1 ]; then
     echo "drive-build: checks passed — start ONE fresh session (any harness) with this prompt, then re-run --print-prompt:"

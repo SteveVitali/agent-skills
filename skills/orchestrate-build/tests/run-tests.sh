@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# run-tests.sh — self-test for orchestrate-build's scripts: ci-boundary.sh (SK-01) and drive-build.sh's
-# status-enum guard, CI gate and --print-prompt (SK-02). No network: a stub `gh` (stub-gh.sh) answers
+# run-tests.sh — self-test for orchestrate-build's scripts: ci-boundary.sh (SK-01), drive-build.sh's
+# status-enum guard, CI gate, --print-prompt (SK-02) and harness line (SK-04), and digest.sh (SK-08). No network: a stub `gh` (stub-gh.sh) answers
 # from canned files and a stub agent CLI (stub-agent.sh) closes one ticket per call.
 #
 # Usage:   run-tests.sh
@@ -282,6 +282,17 @@ test_drive_build() {
     grep -qF "$kw" "$W/docs/build/LEDGER.md.prompt" 2>/dev/null || fail "drive-build headless-prompt: prompt lacks '$kw'"
   done
 
+  # SK-04: the prompt names the ledger's recorded harness and what a different one means
+  W="$(mkrepo)"; green_stack; setkey "$W/docs/build/LEDGER.md" lastCompleted T1; setkey "$W/docs/build/LEDGER.md" nextTicket T2
+  awk '/^updatedAt:/ {print "harness:         claude-code/claude-opus-5-5/headless"} {print}' "$W/docs/build/LEDGER.md" > "$W/l.t" && mv "$W/l.t" "$W/docs/build/LEDGER.md"
+  printf '| 1 | T1 | ticket | demo/T1 | #7 | demo/base | 2026-10-01 | — | — | n-a | runs/T1.md | x |\n' >> "$W/docs/build/BUILD_INDEX.md"
+  drive 0 harness-prompt "$W" --print-prompt
+  for kw in "harness(ledger)=claude-code/claude-opus-5-5/headless" "harness:\` reads 'claude-code/claude-opus-5-5/headless'" \
+            "you are a harness switch (BM-HARNESS-01)" "record a PHASE LOG \`harness-switch\` entry quoting them, or stop and ask" \
+            "write the operator digest (orchestrate-build §4, scripts/digest.sh)"; do
+    printf '%s' "$OUT" | grep -qF -- "$kw" || fail "drive-build harness-prompt: lacks '$kw'"
+  done
+
   # other --skill ledgers (research rows, no PRs) default to no CI gate
   W="$(mkrepo)"; newstub; setkey "$W/docs/build/LEDGER.md" lastCompleted A1
   drive 3 non-build-skill "$W" --skill synthesize-spec --max-iters 1 && expect_calls non-build-skill 1
@@ -290,9 +301,53 @@ test_drive_build() {
   [ "$FAIL" -eq "$ok_before" ] && say "PASS drive-build"
 }
 
+# ── digest.sh (SK-08) ─────────────────────────────────────────────────────────
+test_digest() {
+  local W ok_before=$FAIL DG="$SCRIPTS/digest.sh" day
+  W="$(mkrepo)"; green_stack; checks 7 "" "web${T}fail${T}$(run_url 72)${T}tests failed${T}CI"
+  setkey "$W/docs/build/LEDGER.md" lastCompleted T2; setkey "$W/docs/build/LEDGER.md" nextTicket T3
+  awk '/^updatedAt:/ {print "harness:         devin-desktop/swe-2-high/manual"} {print}' "$W/docs/build/LEDGER.md" > "$W/l.t" && mv "$W/l.t" "$W/docs/build/LEDGER.md"
+  printf '| 1 | T1 | ticket | demo/T1 | #7 | demo/base | 2026-10-01 | — | — | n-a | runs/T1.md | x |\n| 2 | T2 | ticket | demo/T2 | #8 | demo/T1 | 2026-10-01 | — | — | n-a | runs/T2.md | x |\n' >> "$W/docs/build/BUILD_INDEX.md"
+  printf '7\tdemo/T1\n8\tdemo/T2\n31\tsomeone-else/side\n' > "$STUB_GH_DIR/list-open"
+  printf '12\tHotfix the deploy script\t2026-09-30T22:10:00Z\tocto-other\tmain\n' > "$STUB_GH_DIR/list-merged"
+  mkdir -p "$W/docs/tickets"; printf '| id | item | why deferred | unblocked by | how to verify | proxy now | kind | status |\n|---|---|---|---|---|---|---|---|\n| D-T1-9 | sign the venue contract | operator only | owner: the operator · trigger: 2026-10-08 | readout | none | P | OPEN |\n' > "$W/docs/tickets/DEFERRALS.md"
+  OUT="$(PATH="$STUBPATH" bash "$DG" --ledger "$W/docs/build/LEDGER.md" --trigger wave --write \
+        --spend "\$41.20 this wave (billing export read 2026-10-01T06:00Z)" --usage "6 runs; median 180k, max 240k tokens; no usage-limit event" 2>&1)"; RC=$?
+  [ "$RC" -eq 0 ] || { fail "digest: exit=$RC"; printf '%s\n' "$OUT" | sed 's/^/      /' | tail -20; }
+  for kw in "operator digest (wave)" "**Harness:** devin-desktop/swe-2-high/manual" "#7 (T1) — RED — blockedOn: CI fail on #7 (web): tests failed (run 72)" \
+            "#8 (T2) — pass — ci: pass #8@" '#12 "Hotfix the deploy script" → main, merged by octo-other at 2026-09-30T22:10:00Z' \
+            "D-T1-9 — sign the venue contract — owner: the operator — trigger: 2026-10-08" "**Spend:** infrastructure \$41.20 this wave" \
+            "agent usage 6 runs; median 180k" "exposed: no" "**Production anomalies read this session:** not reported by the session"; do
+    printf '%s' "$OUT" | grep -qF -- "$kw" || fail "digest: lacks '$kw'"
+  done
+  printf '%s' "$OUT" | grep -qF "#31" && fail "digest: listed an open PR that is not a chain row as a chain PR"
+  day="$(ls "$W/docs/build/reports/digests/" 2>/dev/null | head -1)"
+  [ -n "$day" ] && grep -qF "#7 (T1) — RED" "$W/docs/build/reports/digests/$day" || fail "digest: --write did not append to reports/digests/<date>.md"
+  printf '%s' "$day" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}\.md$' || fail "digest: file name '$day' is not <date -u +%F>.md"
+  # a second digest appends (never rewrites) and lists merges since the first one
+  PATH="$STUBPATH" bash "$DG" --ledger "$W/docs/build/LEDGER.md" --trigger pause --write >/dev/null 2>&1
+  [ "$(grep -c '^## ' "$W/docs/build/reports/digests/$day")" = "2" ] || fail "digest: the second digest did not append"
+  grep -qF "search merged:>=" "$STUB_GH_DIR/calls" || fail "digest: merges were not read since the previous digest"
+  # the validator's secret scan covers reports/, and a digest never carries a token-shaped string
+  bash "$HERE/../../build-memory/scripts/check-build-memory.sh" "$W" >/dev/null 2>&1
+  grep -rE 'ghp_[A-Za-z0-9]{36}' "$W/docs/build/reports" >/dev/null && fail "digest: a token-shaped string was written"
+  printf '13\tleak ghp_%s\t2026-10-01T01:00:00Z\tocto\tmain\n' "abcdefghijklmnopqrstuvwxyz0123456789" > "$STUB_GH_DIR/list-merged"
+  OUT="$(PATH="$STUBPATH" bash "$DG" --ledger "$W/docs/build/LEDGER.md" --write --since 2026-01-01T00:00:00Z 2>&1)"; RC=$?
+  { [ "$RC" -eq 3 ] && [ "$(grep -c '^## ' "$W/docs/build/reports/digests/$day")" = "2" ]; } || fail "digest: a secret-shaped token was not refused (exit=$RC)"
+  OUT="$(PATH="$STUBPATH" bash "$DG" --ledger "$W/docs/build/LEDGER.md" --exposed yes --since 2026-10-01T02:00:00Z 2>&1)"; RC=$?
+  { [ "$RC" -eq 3 ] && printf '%s' "$OUT" | grep -qF "exposed: yes — stop for rotation"; } || fail "digest: --exposed yes did not stop (exit=$RC)"
+  # gh absent: the GitHub lines read unknown, never green
+  if ! PATH=/usr/bin:/bin command -v gh >/dev/null 2>&1; then
+    OUT="$(PATH=/usr/bin:/bin bash "$DG" --ledger "$W/docs/build/LEDGER.md" 2>&1)"
+    printf '%s' "$OUT" | grep -qF "**CI of open chain PRs:** unknown (gh absent) — never treated as green" || fail "digest: gh absent not reported as unknown"
+  fi
+  [ "$FAIL" -eq "$ok_before" ] && say "PASS digest"
+}
+
 say "orchestrate-build self-test"
 test_ci_boundary
 test_drive_build
+test_digest
 
 if [ "$FAIL" -eq 0 ]; then
   say "ALL PASS"

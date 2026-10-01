@@ -106,9 +106,15 @@ cutting: `docs/build/LEDGER.md` (what has landed, `chainTip`, `round`), `docs/ti
 that a new round may close), `docs/research-ledger.md` §Q (operator decisions), and `docs/build/BACKLOG.csv`
 (carried debt). Also read the open stack's CI state (`orchestrate-build/scripts/ci-boundary.sh --ledger
 docs/build/LEDGER.md --stack --no-wait` — BM-CI-01) and the latest operator digest under
-`docs/build/reports/digests/` if one exists (*forward: SK-08*), so a round is never planned on top of red PRs. The
-new round's tickets fork from the current `chainTip`; you open a new numbered round banner in the manifest's chain
-table, append under it and to `## Plan extensions`, and never rename an existing ticket file (BM-COMPAT-05).
+`docs/build/reports/digests/` (BM-DIGEST-01; `orchestrate-build/scripts/digest.sh` writes one if none is recent), so
+a round is never planned on top of red PRs. The new round's tickets fork from the current `chainTip`; you open a new
+numbered round banner in the manifest's chain table, append under it and to `## Plan extensions`, and never rename
+an existing ticket file (BM-COMPAT-05).
+
+**A run-time insert is a scoped extend.** When `orchestrate-build` needs a ticket inserted mid-round (a red-CI
+fix, an operator-requested production change, a split), run `mode=extend` on just that scope: Phase 3 writes its
+contract, Phase 4 reviews it in a fresh context, and it lands as a suffix-letter file (`16a_…`) under the current
+round banner with a `## Plan extensions` line — never a contract drafted ad hoc at a boundary (BM-MANIFEST-03).
 
 ---
 

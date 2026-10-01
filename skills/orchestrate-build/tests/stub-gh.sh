@@ -4,6 +4,7 @@
 # Reads canned answers from $STUB_GH_DIR and appends every call to $STUB_GH_DIR/calls:
 #   gh pr view <n> …          → $D/view-<n>  ("<headSha>\t<STATE>\t<base>\t<head>"); absent → exit 1
 #   gh pr list --head <b> …   → $D/head-<b> (a PR number; `/` in <b> written as `_`); absent → empty
+#   gh pr list --state <s> …  → $D/list-<s> (pre-rendered --jq output lines); absent → empty
 #   gh pr checks <n> …        → $D/checks-<n>.<k> for the k-th call (the highest k <= the call count),
 #                               else $D/checks-<n>; lines "<name>\t<bucket>\t<link>\t<description>\t<workflow>".
 #                               A file whose first line is `@nochecks` or `@error` emulates gh's stderr + exit 1.
@@ -17,9 +18,9 @@ case "$sub" in
     [ -f "$D/view-$1" ] || { echo "GraphQL: Could not resolve to a PullRequest with the number of $1." >&2; exit 1; }
     cat "$D/view-$1" ;;
   list)
-    head=""
-    while [ $# -gt 0 ]; do [ "$1" = "--head" ] && head="${2:-}"; shift; done
-    f="$D/head-$(printf '%s' "$head" | tr '/' '_')"
+    head="" ; state=""
+    while [ $# -gt 0 ]; do [ "$1" = "--head" ] && head="${2:-}"; [ "$1" = "--state" ] && state="${2:-}"; shift; done
+    if [ -n "$head" ]; then f="$D/head-$(printf '%s' "$head" | tr '/' '_')"; else f="$D/list-$state"; fi
     [ -f "$f" ] && cat "$f"
     exit 0 ;;
   checks)
