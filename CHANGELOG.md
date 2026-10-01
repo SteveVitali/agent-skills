@@ -3,6 +3,149 @@
 All notable changes to agent-skills are recorded here. Versioning is the plugin version in
 `.claude-plugin/plugin.json`.
 
+## 0.5.0 — History mode, a truthful validator, harness identity and the operator digest (SK-04, SK-05, SK-07, SK-08, SK-11, SK-12, SK-15, SK-16, SK-21, SK-23, SK-24, SK-25)
+
+The third and last staged part of the SK-01…SK-25 proposals (Round-11 planning, B6). With 0.3.0 (Tier A) and
+0.4.0 (Tier B-must) it **completes B6's planned set**: every proposal is applied, and no *(forward: SK-nn)*
+reference remains (`tests/lint-skills.sh` now fails if one reappears). A minor bump, because several behaviours
+change (below). **Backward-compatible:** scratch mode is unchanged; a committed repo without the guards marker sees
+new **warnings** only — the one new failure, exit 3, fires only for a PHASE LOG whose done entries mostly cannot be
+parsed. History mode judges only what a change adds or removes, so it never fails a legacy record for what it
+already holds.
+
+### Behaviour changes
+- **Validator exit 3 (vacuous).** When a ledger's PHASE LOG has `done` entries but fewer than half parse to a
+  ticket id, the validator exits 3 instead of passing the done ↔ BUILD_INDEX check vacuously (SK-15 item 1).
+- **The PHASE LOG parser strips `*`/`_`/backtick markup**, so legacy bolded entries are now evaluated: one that
+  only parses after stripping is judged *guarded* in the current region and as a warning in older regions; a
+  canonical entry fails as before.
+- **CURRENT STATE vocabularies are checked** (`projectStatus`, `pauseRequested`, `mergePolicy`, `autonomy`,
+  integer `round`, ISO `updatedAt`) — *guarded*. B6 proposed failing at once; it is guarded here so legacy trees
+  (e.g. an `IN-PROGRESS` ledger) stay at 0 violations until they opt in with the guards marker.
+- **The JSON report moved** from the shared `/tmp/build-memory-check.json` to `--json PATH` or a unique `mktemp`
+  file named on the last stdout line, with schema `build-memory-check/2`: input identity `{repo, commit, dirty,
+  input_digest}`, `summary.exit`, `counts {check: {candidates, evaluated}}`, diagnostics `{check, severity, file,
+  obligation, evidence, message}` — the reviewed `contract/patch/3` shape of SIG's vendored fork (SK-15 item 10).
+  `check-backlog.sh` (`backlog-check/2`) and `merge-dryrun.sh` (`merge-dryrun/2`) also write unique temp files.
+- **`adr-index.sh` output changes where a cell read `—`**: it now parses `# ADR-NNN —` titles, `Phase` /
+  `Phase / ticket` fields, plain (unbolded) header bullets and an appended `Superseded by` line, and escapes `|`.
+  An index the 0.4.0 generator wrote is recognised (`--legacy`) and only warns; regenerate it (SK-21).
+- **`check-backlog.sh` is verdict-aware** (SK-23): `MET-DIFFERENTLY` rows are no longer demanded as sources
+  (back to the documented contract — a backlog that homed them still passes); `MET-ENGINEERED(D-…)` is covered by
+  its owed-leg D-rows; `WAIVED(ADR-nnn)` by its ADR. New issue kinds: `stale-met-engineered`, `met-with-owed-leg`,
+  `waiver-adr`, `home-closed`, `two-sums`, `readiness` (TBD). The matrix and backlog are read with a quote-aware
+  CSV reader, so a quoted comma no longer shifts the verdict cell.
+- **`drive-build.sh`'s prompt** names the ledger's recorded `harness:` and says that a different harness or model
+  is a switch (stop and ask unless the operator's words are recorded), and when to write the operator digest; the
+  log header prints the ledger's harness (SK-04, SK-08).
+- **The validator's secret scan skips `docs/build/logs/` while reading** (same findings — they were filtered out
+  afterwards); on SIG the tree check fell from 32 s / 100 s to 20 s / 21 s.
+
+### Added / changed, by proposal
+- **SK-04 — harness identity.** `layout.md` BM-HARNESS-01 full text (CURRENT STATE `harness:`, run-ledger
+  `Harness:`, PHASE LOG `harness:` field, BUILD_INDEX `harness` cell, commit trailer; a switch only at a boundary,
+  as a `harness-switch` entry quoting the operator; an unrequested switch pauses). `orchestrate-build` §0 records it;
+  `implement-spec` §6.5 never overwrites a different `harness:` at close. Validator: a run ledger created after the
+  guards marker without `Harness:` fails (older: one aggregated warning).
+- **SK-05 — close, repair and planning discipline.** "Reconcile it yourself" is retired: a missing close is a PHASE
+  LOG `repair — close: <gap>` entry, never a back-filled `done`; a second close repair in a round sets `blockedOn:
+  worker close protocol broken`. Inserts are a scoped `decompose-spec mode=extend` (contract + fresh-context
+  review); out-of-loop work gets a `retroactive` row first. Validator: two close repairs with `blockedOn` empty warn;
+  chain rows outside a numbered `### Round <n>` banner warn (V13), and history mode fails a new one.
+- **SK-07 — orient within a byte budget.** BM-ORIENT-01 full text (O1–O6, ≤ 48 KiB) in `layout.md` and
+  `orchestrate-build` §0. Validator: stale orient paths and tokens (`.agents/scratch`, `gitignored`, `Do not resume
+  until`, + `record_policy/stale_tokens.txt`) and CURRENT STATE over 3 KiB are guarded; the orient probe (V11) warns
+  over 48 KiB.
+- **SK-08 — layered progress, operator digest, stop-and-ask.** BM-DIGEST-01 full text. New
+  `orchestrate-build/scripts/digest.sh` appends a digest to `docs/build/reports/digests/<date -u +%F>.md`
+  (append-only) from what it can read — harness, ledger state, validator, the CI of every open chain PR, merges by
+  anyone since the previous digest (from GitHub), the default branch and whether the chain descends from it, owed
+  human work with owner and trigger — plus the session's production, **spend** and **agent-usage** lines (never an
+  invented figure); it refuses to write a token-shaped string and exits 3 on `--exposed yes`. `orchestrate-build` §4:
+  the layered boundary line, the digest at every pause, session end, usage-limit event and the OPERATING MODE
+  cadence (e.g. once per wave), and the stop-and-ask list (incl. a usage-limit event). `decompose-spec mode=extend`
+  reads the latest digest (its forward reference is resolved).
+- **SK-11 — layered status in the worker's evidence.** The gap table gains `required layer` / `achieved layer` and
+  `met-engineered(D-id)`; fixture-only never reads `met` for a `live-executed` AC; stand-ins carry no retrieval
+  dates; no agent label counts as human. BUILD_INDEX `live verification` vocabulary `live-executed | staging |
+  fixture-only | engineered | n-a | gate-pending` (legacy `run`); off-vocabulary values warn.
+- **SK-12 — tests assert invariants.** BM-TEST-01 full text; `implement-spec` §1.4/§5.1. Validator heuristic
+  `living-pin?` warns on a tracked test that names a living record file and a living key (on SIG it flags
+  `tests/unit/test_agent_docs_current_state.py:85`, as B6's replay predicted, and three more).
+- **SK-15 — tree-mode truth checks** (items 1–10): bold-aware parser with `candidates`/`evaluated` and exit 3;
+  vocabularies; budgets (incl. CURRENT STATE ≤ 3 KiB); stale paths/tokens; `nextTicket` = the lowest chain row not
+  landed (warn; deferred/superseded/unused and HUMAN rows skipped); BUILD_INDEX column count (a header carried across
+  headings), unique seq, `PR pending` once Closed:; record dates later than the clock (warn; `future-ok` exempts);
+  the readout guard sentence (fails for readouts created after the guards marker — decided by commit ancestry, not
+  timestamps); the orient probe; the JSON identity. `--now` sets the clock for tests.
+- **SK-16 — history mode.** New `build-memory/scripts/check-history.sh` (bash 3.2 + git), reached as
+  `check-build-memory.sh --range BASE..HEAD | --staged | --first-parent SHA`, plus `--replay FROM..TO` (a
+  read-only backtest). BM-HIST-01 in `layout.md`: append-only + append position for the LEDGER's protected regions;
+  living-archived head (byte-for-byte archive + pointer); DEFERRALS row-annotate (every cell's text survives; a new
+  leading status carries a new date); readouts change only `Status:`; BUILD_INDEX added rows (column count, seq,
+  real PR); manifest append-only sections, id registry, V13; frozen executed contracts (`> Amended` only) and landed
+  ADRs (`Superseded by ADR-NNN` only); `*.jsonl` byte prefix; digests append-only; record-date rules R1, R2, R3, R5,
+  R6 on added lines with each line's own committer time; repo policy `docs/build/tools/record_policy/history.policy`
+  (`append-only`, `date`, `allow … expires`, `exempt`, `archive`); repo hook `docs/build/tools/memory_guard.*`
+  delegated with `all <mode args>`; exits 0/1/2/5 (shallow clone → 5, "set fetch-depth: 0"). Wired into
+  `implement-spec` §6.5 (`--staged`) and `orchestrate-build` §2.3 (`--range <chainTip before>..<after>`); DEFERRALS
+  rule 5 for rows *added* under the guards marker now fails there.
+- **SK-21 — `adr-index.sh` parses the header forms in use** (above); the validator warns on every `—` cell and
+  fails one for an ADR added after the guards marker.
+- **SK-23 — verdict-aware backlog, two sums, REC sweeps.** `check-backlog.sh` (above) prints and compares the two
+  sums with `CAPSTONE_CLOSURE.md`; `modes/backlog.md` adds home liveness, readiness with probe/`ci-boundary`
+  citations ≤ 24 h, and the REC sweeps (a dated revisit-trigger sweep, a risk-register `## Round <n> review`, the
+  two sums); `tail/REC.1` carries them as ACs.
+- **SK-24 — the integration plan reads CI and outside merges.** `merge-dryrun.sh --ci` reads each branch's open PR
+  once through `ci-boundary.sh --no-wait` (pass / FAIL with the check and first failing line / pending / unknown /
+  none, with the `date -u` of the read; without `gh`, `unknown`); `modes/integration.md` adds the external state and
+  "a step that merges a red PR says so"; the non-goal is "no CI *fixing*"; `tail/REC.3`'s AC names the check state.
+- **SK-25 — planning-ledger clock, freshness and verbatim decisions.** `check-build-memory.sh --planning <ledger>`
+  (V14: `updatedAt` ≥ the newest change-log stamp, `lastCompleted` the newest done row the change log names,
+  `nextUnit` not done; no build-memory marker needed); history mode judges planning change-log stamps (R1).
+  `synthesize-spec` run/plan/ratify: stamps from `date -u` at writing (never `HH:2x`), one writer for CURRENT
+  STATE, answers verbatim with the receipt time, agent-drafted answers `pending confirmation` until the operator
+  confirms the exact text, hedged words → yes/no. The research-ledger template follows.
+- **Layout and templates.** `layout.md` gives the full text of BM-HARNESS-01, BM-ORIENT-01, BM-TEST-01,
+  BM-DIGEST-01 and BM-HIST-01 (the "cited before their full text lands" table is gone), the PHASE LOG `repair` /
+  `harness-switch` / `retroactive` forms, the DEFERRALS flip form (`DONE <date> (evidence) — was: OPEN …`), and the
+  validator's three modes. The LEDGER template's OPERATING MODE gains Records / Harness / Digest lines; the manifest's
+  `## Operating rules` gains Records and Reporting; BUILD_INDEX, REC.1, REC.3, research-ledger and the AGENTS section
+  follow.
+
+### Tests
+Every new assertion fails against 0.4.0 (run against a 0.4.0 worktree: build-memory 87, orchestrate-build 19,
+reconcile-build 19, lint 33 failing assertions), and every earlier test still passes.
+- `build-memory/tests`: `v2-violations` gains the bolded done entry, `IN-PROGRESS`, a `PR pending` row of a Closed:
+  run ledger, a readout without the guard sentence and a future date; new `v2-vacuous` (exit 3); `v2-guards-violations`
+  gains stale orient text and the Harness rule; `truth-checks` (vocabularies, nextTicket, close repairs, BUILD_INDEX
+  shape, the clock with `--now` and `future-ok`, V13, the orient probe, `living-pin?`, unique JSON paths and the
+  report identity), `new-files` (the guards marker by commit ancestry), `planning-v14`, the SK-21 adr-index cases.
+- `build-memory/tests/history/build.sh` (new): throw-away repos committed with `GIT_COMMITTER_DATE` in the shapes of
+  real SIG commits — `c2055d96` (rows deleted), `307161ee` (top insertion), `305f94d5` (+1 day), `95c8a73f`
+  (signing: guard line deleted + `Date: 2026-10-19`), `0a715fcc` (in-place tick), `7a2ff9fa` (jsonl rewrite) —
+  plus a correction line, living-archived exact vs one byte off, R2/`retro:`, `future-ok`, a sqitch line planned
+  ahead, an expired vs live allow entry, R6, DEFERRALS flips, rule 5 with and without the marker, BUILD_INDEX rows,
+  V13 and the id registry, frozen contracts and ADRs, `--staged`, `--first-parent` on a merge, scratch (2), shallow
+  (5), an unresolvable range (5), the repo hook, `--replay`.
+- `orchestrate-build/tests`: `digest.sh` (red and green PRs, an outside merge, owed P rows, spend/usage lines,
+  append-only, merges since the last digest, a token-shaped string refused, `--exposed yes`, gh absent) and the
+  harness lines of the prompt. The stub `gh` answers `pr list --state <s>`.
+- `reconcile-build/tests/run-tests.sh` (new): a matrix with all eight verdicts × OPEN/PARTIAL/DONE D-rows (clean,
+  every issue kind, dropped and double-tracked sources, the two sums) and `merge-dryrun.sh --ci` with the stub `gh`.
+- `tests/lint-skills.sh`: "reconcile it yourself", "bump `updatedAt`" (synthesize-spec), "no CI" (reconcile-build)
+  and any `forward: SK-` stay retired; the SK-04/05/07/08/11/12/16/23/24/25 rules stay present; BM-HARNESS-01,
+  BM-ORIENT-01, BM-TEST-01, BM-DIGEST-01, BM-HIST-01 resolve in `layout.md`; cited ids are checked across every
+  build skill.
+
+### Not in this release (recorded, not done)
+- The cross-harness behavioural eval (B6 §6.6, trap scenarios T1–T5, N ≥ 3 per harness) — an agentic eval with
+  real harness runs; the harnesses are the operator's choice (Q-B6-5).
+- A CI workflow for this repo on macOS and Linux (B6 §6) — the suites ran on macOS bash 3.2 only; awk programs avoid
+  interval expressions for mawk, but Linux is unverified.
+- Mechanical checks for the REC.1 revisit-trigger sweep section and for production claims without a probe citation
+  — prose and REC.1 acceptance criteria only; `check-backlog.sh` checks the sums and TBD.
+
 ## 0.4.0 — CI at every boundary, gate records, production rule, clock (Tier B-must: SK-01, SK-02, SK-03, SK-06, SK-09, SK-10)
 
 The second staged part of the SK-01…SK-25 proposals (Round-11 planning, B6): the skill text that, followed

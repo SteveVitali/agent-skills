@@ -106,7 +106,10 @@ is still the per-ticket worker, run once per ticket in a fresh context:
   State lives in the ledger; the human pauses and intervenes at ticket
   boundaries by editing it. At every boundary the PR checks are read
   ([`ci-boundary.sh`](skills/orchestrate-build/scripts/ci-boundary.sh)), and
-  the loop refuses to dispatch past a red, pending or unreadable PR. Degrades
+  the loop refuses to dispatch past a red, pending or unreadable PR; the
+  history check proves protected records only gained lines, and an operator
+  digest ([`digest.sh`](skills/orchestrate-build/scripts/digest.sh)) reports
+  red PRs, outside merges, owed human work and spend at every pause. Degrades
   to a subagent-per-ticket or a manual fresh-session floor
   (`drive-build.sh --print-prompt`) where a harness offers less; the
   [rationale](skills/orchestrate-build/README.md) covers why it stays
