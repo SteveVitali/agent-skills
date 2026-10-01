@@ -18,7 +18,7 @@
 > `implement-spec spec=docs/tickets/<nextTicket file> worktree=<buildWorktree> base_branch=<chainTip>`
 > - **Orient (BM-ORIENT-01):** read `sed -n '1,/^## OPEN FINDINGS/p'` of this file, the RETURN PASS table, its last three PHASE LOG entries, and the next row's manifest line + contract header — never this file, DEFERRALS or BUILD_INDEX whole.
 > - **Clock (BM-CLOCK-01):** every date you write is `date -u` at that moment.
-> - **CI (BM-CI-01):** read the PR checks at every ticket boundary; red, pending or unreadable → `blockedOn`; never stack on red.
+> - **CI (BM-CI-01):** read the PR checks at every ticket boundary (`ci-boundary.sh --ledger <this file> --ticket <lastCompleted> --stack`); red, pending or unreadable → `blockedOn`; never stack on red.
 
 ## CURRENT STATE
 

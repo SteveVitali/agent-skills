@@ -160,10 +160,17 @@ test_guards() {
   for kw in "over the 12 KiB budget" "> 256 B" "'| PRIOR'" "not a PHASE LOG heading" "guards marker: on"; do
     printf '%s' "$out" | grep -qF "$kw" || { fail "v2-guards-violations: output missing '$kw'"; ok=0; }
   done
+  # SK-03: 7-column GATE DECISIONS — an off-vocabulary kind and an unscoped pre-authorization fail
+  for kw in "GATE DECISIONS kind 'decided' is not one of" "a pre-authorization row lacks expires:"; do
+    printf '%s\n' "$out" | grep -E '^    - gate: LEDGER.md line [0-9]+: ' | grep -qF "$kw" \
+      || { fail "v2-guards-violations: output missing violation '$kw'"; ok=0; }
+  done
   # the same tree without the marker only warns
   grep -v 'build-memory-guards' "$W/docs/build/README.md" > "$W/r.tmp" && mv "$W/r.tmp" "$W/docs/build/README.md"
-  bash "$SCRIPTS/check-build-memory.sh" "$W" >/dev/null 2>&1; rc=$?
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
   [ "$rc" -eq 0 ] || { fail "v2-guards-violations: without the marker exit=$rc (want 0)"; ok=0; }
+  printf '%s\n' "$out" | grep -E '^    ~ gate: LEDGER.md line [0-9]+: ' | grep -qF "a pre-authorization row lacks expires:" \
+    || { fail "v2-guards-violations: without the marker the pre-authorization row is not a warning"; ok=0; }
   [ "$ok" = 1 ] && say "PASS v2-guards-violations"
 }
 
@@ -198,6 +205,30 @@ test_ledger_variants() {
   sed -e 's/^Status: PENDING/Status: SIGNED/' "$HERE/../templates/READOUT.md" > "$W/docs/build/readouts/GATE-ACCEPT.md"
   out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"
   printf '%s' "$out" | grep -qF "GATE-ACCEPT.md is missing or not signed" && { fail "variants: signed GATE-ACCEPT still warned"; ok=0; }
+  # SK-03: a 7-column GATE DECISIONS table — valid kinds pass silently; an off-vocabulary kind and a
+  # pre-authorization without expires:/voided-by: warn (no guards marker); a 6-column table is not judged
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; L="$W/docs/build/LEDGER.md"
+  edit "$L" '/^## RETURN PASS/ {
+    print "### Round 2"; print ""
+    print "| date | ticket | gate | item | answer (verbatim) | consequence | kind |"
+    print "|---|---|---|---|---|---|---|"
+    print "| 2026-09-10T01:00:00Z | T2 | G1 | budget | \"yes, release it\" (chat) | recorder: budget released | decision |"
+    print "| 2026-09-10T01:05:00Z | T2 | G1 | G1.2 | \"pre-approved: G1.2 only\" (chat) | recorder: G1.2 | pre-authorization · expires: T3 · voided-by: any new item |"
+    print "| 2026-09-10T01:06:00Z | T2 | CI | #7 web | \"waive web on #7\" (chat) | recorder: waived | waiver |"
+    print ""
+  } {print}'
+  sed -e 's/| recorder: G1.2 | pre-authorization · expires: T3 · voided-by: any new item |/| recorder: G1.2 · expires: T3 · voided-by: any new item | pre-authorization |/' "$L" > "$L.tmp" && mv "$L.tmp" "$L"
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  { [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -qE '^    [-~] gate: LEDGER.md line'; } \
+    || { fail "variants: a valid 7-column GATE DECISIONS table was flagged (exit=$rc)"; printf '%s\n' "$out" | sed 's/^/      /'; ok=0; }
+  edit "$L" '{print} /^\| 2026-09-10T01:06:00Z/ {
+    print "| 2026-09-10T02:00:00Z | T2 | G1 | all | \"approve everything\" (chat) | recorder: blanket | pre-authorization |"
+    print "| 2026-09-10T02:01:00Z | T2 | G1 | G1.3 | \"I wonder if we should\" (chat) | recorder: hedge | maybe |"
+  }'
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] || { fail "variants: 7-column gate rows failed without the guards marker (exit=$rc)"; ok=0; }
+  printf '%s' "$out" | grep -qF "a pre-authorization row lacks expires:" || { fail "variants: unscoped pre-authorization not warned"; ok=0; }
+  printf '%s' "$out" | grep -qF "kind 'maybe' is not one of" || { fail "variants: off-vocabulary kind not warned"; ok=0; }
   # a PENDING readout from templates/READOUT.md is not read as PASSED (its Status comment lists the values)
   W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; mkdir -p "$W/docs/build/readouts"
   cp "$HERE/../templates/READOUT.md" "$W/docs/build/readouts/GATE-G1.md"

@@ -1,8 +1,9 @@
 <!--
   Template: docs/tickets/NN[a-z]_GATE-G<k>__<slug>.md — a GATE marker (BM-TICKET-05, BM-GATE-03).
   Written by: decompose-spec. A marker, NOT an implement-spec input: no run line. Executed by
-  orchestrate-build (read/produce the readout, present it, record the operator's words, commit,
-  continue or stop). Never guessed past. A decomposition never pre-answers it.
+  orchestrate-build (read the readout, or draft it inside a labelled agent-drafted block —
+  BM-GATE-08; present it; record the operator's words verbatim — BM-GATE-05; commit; continue or
+  stop). Never guessed past. A decomposition never pre-answers it.
 -->
 # GATE-G<k> — <short title>
 

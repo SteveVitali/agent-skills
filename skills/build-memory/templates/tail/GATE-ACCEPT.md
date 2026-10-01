@@ -40,7 +40,6 @@ capstone phase remains (`DEFERRALS.md` rule 4).
 ## Disposition
 Recorded only from the operator's own words (READOUT shape + GATE DECISIONS `kind: decision`).
 - [ ] *(live-read)* The readout cites the live state it describes: the CI read of every open PR
-      in the stack (`ci-boundary.sh` output once it ships — BM-CI-01; until then
-      `gh pr checks <n>` with its `date -u`); where the build has a production surface, a probe-run record (id,
+      in the stack (`ci-boundary.sh --stack --no-wait` output with its `read_at` — BM-CI-01); where the build has a production surface, a probe-run record (id,
       `date -u`, result, sha256) no older than 24 h at the commit. A statement about production
       state with no such citation is removed, not written.

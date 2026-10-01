@@ -151,9 +151,9 @@ harness          # OPTIONAL: <harness>/<model-id>/<tier> (BM-HARNESS-01)
 updatedAt        # date -u +%FT%TZ at writing (BM-CLOCK-01)
 ```
 
-- `blockedOn` is reserved for **real** blocks (red verification, missing dependency, missing
-  infrastructure the operator refused). A pending human gate is never a block; it is a
-  `RETURN PASS` row (BM-LEDGER-03).
+- `blockedOn` is reserved for **real** blocks (red verification incl. a CI read that is not
+  green — BM-CI-01, missing dependency, missing infrastructure the operator refused). A pending
+  human gate is never a block; it is a `RETURN PASS` row (BM-LEDGER-03).
 - `GATE DECISIONS` is an append-only table, rows appended at the end of the section, newest
   last: `| date | ticket | gate | item | answer (verbatim) | consequence | kind |` — `date` is
   the `date -u` of receipt; `answer` the operator's exact words in quotes (+ channel);
@@ -354,8 +354,11 @@ table is never re-headed (a new round may open `## Round <n>` with the new heade
 the worker at close, never reconstructed later. `docs/build/runs/<ID>.md` is the implement-spec run ledger:
 `Spec / Base / Branch / Config`, `## Deferrals read`, `## Requirements`, `## Acceptance
 criteria`, `## Plan`, `## Test matrix`, `## Progress`, `## Gap table`, `## Evidence log`,
-`## Evidence report` (the text submitted as the PR body) (BM-INDEX-02). `docs/build/pr/<ID>.md`
-is the PR body as submitted (`gh pr create --body-file`). Readouts
+`## Evidence report` (the text submitted as the PR body); its header also carries
+`Harness: <harness>/<model-id>/<tier>` (BM-HARNESS-01), `Skills:` (the skills version loaded),
+`Started:` and `Closed:` (`date -u +%FT%TZ`) and, at close, the `ci:` field (BM-CI-01)
+(BM-INDEX-02). `docs/build/pr/<ID>.md` is the PR body as submitted (`gh pr create
+--body-file`). Readouts
 `docs/build/readouts/{GATE-G<k>,GATE-ACCEPT,HUMAN-H<k>}.md` follow `templates/READOUT.md` and
 are append-only except their single `Status:` line (PENDING → SIGNED | PASSED |
 SKIPPED-BY-OPERATOR | NOT-PASSABLE). Each carries the **guard sentence** — "An operator or
@@ -373,23 +376,101 @@ guard sentence in newer ones is *forward: SK-15 item 8*.
 ## Gate protocol (§7, BM-GATE-01..04)
 
 - Before dispatching a ticket whose `Gate status` block has unticked items,
-  `orchestrate-build` pauses (in `checkpoint`/`manual`; in `auto` it treats all items as
-  "skip"), presents the block, records each answer in `GATE DECISIONS`, commits `LEDGER.md`
-  on the chain tip, and dispatches with the prompt line "Gate answers are in
+  `orchestrate-build` pauses in every autonomy mode (in `auto`, an item proceeds without a pause
+  only when a live `pre-authorization` row names its id, acting on that row's words; human,
+  rights, counsel, publication and acceptance items always pause), presents the block, records
+  each answer in `GATE DECISIONS` under BM-GATE-05…09, commits `LEDGER.md` on the chain tip,
+  and dispatches with the prompt line "Gate answers are in
   `docs/build/LEDGER.md` GATE DECISIONS — copy them into the ticket's Gate status block in
   your first commit and act on them" (BM-GATE-01).
 - An answer of "skip" runs the ticket ungated: everything up to the gate, the gated remainder
   as `DEFERRALS.md` rows, its PR opened, and a `RETURN PASS` row with the re-run line.
   Re-running after ticking is idempotent (BM-GATE-02).
-- A `GATE-G<k>` marker row is executed by `orchestrate-build`: read (or produce) the readout,
-  present it, record the disposition (PASSED / SKIPPED-BY-OPERATOR / NOT PASSABLE + what would
-  pass it), commit, continue or stop. Never guessed past (BM-GATE-03).
+- A `GATE-G<k>` marker row is executed by `orchestrate-build`: read the readout (or draft it,
+  labelled per BM-GATE-08), present it, record the operator's disposition verbatim (PASSED /
+  SKIPPED-BY-OPERATOR / NOT PASSABLE + what would pass it), commit, continue or stop. Never
+  guessed past (BM-GATE-03).
 - `drive-build.sh` exits 0 with "gate pending — answer in LEDGER.md GATE DECISIONS and re-run"
   when the only obstacle is a gate under `checkpoint`/`manual`; exit 2 remains for real blocks
   (BM-GATE-04).
 - A decomposition **never pre-answers a gate**: it records the gate and its pre-registered
   thresholds, never a `decision` row. An authorization the operator gives at planning time is
   a `pre-authorization` row (explicit item ids, `expires:`, `voided-by:`), never a blanket rule.
+
+**Gate-record rules (BM-GATE-05…09).** They bind every `GATE DECISIONS` row and readout.
+
+- **Verbatim (BM-GATE-05).** `answer` holds the operator's exact words in quotes, stamped with
+  the `date -u` of receipt and the channel; `consequence` is the recorder's reading, labelled as
+  such; `kind` ∈ decision | pre-authorization | confirmation | waiver | correction. A `decision`
+  is dated at or after the gate's pause.
+- **Tentative ≠ decision (BM-GATE-06).** Interrogative, conditional or hedged words (`?`, "I
+  wonder", "perhaps", "maybe", "should just", "I think … but") are not a decision: restate the
+  concrete decision and its consequences, ask yes/no, record only the answer as a
+  `confirmation` row, and act only after it.
+- **No proxy signatures (BM-GATE-07).** No agent enters a signature, tick or attestation for
+  the operator, even when asked ("sign for me", "on my behalf"); it prepares the text and asks
+  the operator to confirm it. Operator-reported counsel is recorded `operator-reported`; it
+  never closes a counsel obligation or fills a reviewer field.
+- **Agent-drafted text is labelled and confirmed (BM-GATE-08).** Readout text an agent writes
+  sits in an `agent-drafted` block with its sha256 (`templates/READOUT.md`); the operator's
+  confirmation quotes the hash prefix. Signing appends a Signature block and changes only the
+  `Status:` line; it never deletes pending text or the guard sentence.
+- **Scoped pre-authorization (BM-GATE-09).** A pre-authorization (or any blanket rule) lists
+  exact item ids, `expires:` (a ticket or a `date -u +%F` date) and `voided-by:`; it is *live*
+  until it expires or is voided. A new item, or a material new fact, needs a new answer.
+  Planners never pre-answer.
+
+The validator checks, in a 7-column table (its header has a `kind` column), that each row's `kind` is in
+the vocabulary and that a `pre-authorization` row carries `expires:` and `voided-by:`
+(guarded). Whether the words are really the operator's cannot be proven by any in-repo check;
+the rules make a deviation visible, not impossible.
+
+---
+
+## CI and production at the boundary (BM-CI-01, BM-PROD-01)
+
+**CI truth (BM-CI-01).** A ticket's PR checks are read on its pushed head by the worker before
+its closeout (`implement-spec` §6.5 step 0), and again — with every still-open ancestor PR in
+the stack — before the next unit is dispatched (`orchestrate-build` §2.1/§2.3; `drive-build.sh`
+does it mechanically, `--print-prompt` for the `manual` tier).
+
+- The reader is `orchestrate-build/scripts/ci-boundary.sh`, or a repo hook
+  `docs/build/tools/ci_boundary.*` run with `--pr <n> --json <path>` that keeps the shared exit
+  codes: 0 pass / none-declared / not applicable · 3 fail, cancelled, or a required check
+  missing or skipped · 4 pending after the bounded wait (default 45 min) · 5 unknown (never
+  green). The required set is `docs/build/tools/record_policy/ci_required.txt` when present,
+  else every check reported on the head.
+- It is recorded as the `ci:` field of the PHASE LOG `done` entry and the run ledger:
+  `ci: pass #<n>@<sha7> (<check> <run-id>; …)`, `ci: none-declared (locally-green)` when the repo
+  declares no CI, or the pending/unknown line as read. A local-only result is `locally-green`,
+  never "green".
+- Not green → `blockedOn: CI <fail|pending|unknown> on #<n> (<check>): <first failing line>`;
+  `nextTicket` stays and nothing stacks on red. It clears only when a read passes, recorded as a
+  PHASE LOG `repair` entry naming the fixing PR.
+- A red inherited from an ancestor PR blocks too, unless GATE DECISIONS holds the operator's
+  verbatim `waiver` row naming that PR and check. A waiver covers the PR it names: the same red
+  reappearing on a descendant needs that PR named too.
+- Fixing a red is a ticket (an insert or a return pass), never a silent edit inside the next
+  ticket, never a relaxed test.
+- At each boundary the orchestrator also records the external state — `origin/<default>`'s
+  head, whether the chain still descends from it, PRs merged since the last boundary (who,
+  when), open PRs that are not chain rows. An off-stack merge into the chain, or a chain PR
+  rebased or retargeted by someone else, is a `blockedOn` for the operator.
+
+**No out-of-ticket production changes (BM-PROD-01).** A production mutation — a deploy, a job
+execution, a scheduler / database / bucket / IAM / instance change, a publish — runs only inside
+a ticket whose `Production mutations:` header names it (what · scripted path · pre-state capture
+· rollback · verification); no header means none.
+
+- The worker runs it only through that scripted path, after recording the pre-state and the
+  rollback command in the run ledger, and never triggers a paid or expensive operation the
+  header does not name.
+- The orchestrator never runs one, not even on an in-chat "yes": a "yes" authorizes inserting
+  such a ticket.
+- Hosted tickets and every round tail re-read the production state they depend on (backups,
+  publish surface, scheduler).
+- A legacy ticket re-run for a live return pass gets a `> Amended <date -u +%F>:` note naming its
+  mutations (BM-TICKET-04).
 
 ### Rule ids cited before their full text lands
 
@@ -398,10 +479,7 @@ full rule lands here.
 
 | id | short form | full text |
 |---|---|---|
-| BM-CI-01 | PR checks read at every boundary and recorded; red / pending / unreadable → `blockedOn`; nothing stacks on red | *forward: SK-01* |
-| BM-GATE-05…09 | operator words verbatim (+ `date -u`, channel); tentative words get a yes/no confirmation; no proxy signatures; agent-drafted text labelled + hash-confirmed; scoped pre-authorizations | *forward: SK-03* |
-| BM-HARNESS-01 | harness/model id in CURRENT STATE `harness`, run-ledger headers, PHASE LOG and BUILD_INDEX; switch only at a boundary, recorded | *forward: SK-04* |
-| BM-PROD-01 | no production mutation outside a ticket whose `Production mutations:` header names it | *forward: SK-06* |
+| BM-HARNESS-01 | harness/model id in CURRENT STATE `harness`, run-ledger headers, PHASE LOG and BUILD_INDEX; switch only at a boundary, recorded | *forward: SK-04* (the run-ledger `Harness:` header is already BM-INDEX-02) |
 | BM-ORIENT-01 | orient from the ledger head, RETURN PASS, the last three PHASE LOG entries and the next row — never whole files | *forward: SK-07* |
 | BM-TEST-01 | tests assert invariants, never the current value of a living record | *forward: SK-12* |
 
@@ -431,12 +509,14 @@ backward `Depends on`, skeletons without run lines, markers referenced, DEFERRAL
 statuses, no OPEN row past a PASSED gate, ADR ↔ index, revisit triggers, ledger key order
 (optional `harness` in its slot), `nextTicket` validity, PHASE-LOG-done ↔ BUILD_INDEX + runs,
 REQ coverage when the spec and `req_id_pattern` resolve, size + secrets). Guarded checks
-(BM-COMPAT-06): the BM-LEDGER-08 budget and shape. Warnings only: an owed `P` deferral without
-`owner:`/`trigger:`; `projectStatus: DONE` without a signed `GATE-ACCEPT` readout; a seed
-ledger whose GATE DECISIONS holds a non-`pre-authorization` row ("pre-answered gate?"). The
-rest of the truth checks and history mode are *forward: SK-15, SK-16*. `decompose-spec` runs it after seeding,
-`implement-spec` before its close commit, `orchestrate-build` at every boundary; a failure
-is a real block.
+(BM-COMPAT-06): the BM-LEDGER-08 budget and shape; the `kind` of rows in 7-column GATE
+DECISIONS tables, and `expires:` + `voided-by:` on a `pre-authorization` row (BM-GATE-05, -09).
+Warnings only: an owed `P` deferral without `owner:`/`trigger:`; `projectStatus: DONE` without
+a signed `GATE-ACCEPT` readout; a seed ledger whose GATE DECISIONS holds a
+non-`pre-authorization` row ("pre-answered gate?"). The rest of the truth checks and history
+mode are *forward: SK-15, SK-16*. `decompose-spec` runs it after seeding, `implement-spec`
+before its close commit, `orchestrate-build` at every boundary; a failure is a real block. The
+CI read at a boundary is a separate script with the shared exit codes (BM-CI-01).
 
 ---
 

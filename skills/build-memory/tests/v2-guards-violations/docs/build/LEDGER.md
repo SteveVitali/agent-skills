@@ -168,6 +168,13 @@ updatedAt:       2026-09-09
 | date | ticket | gate | item | answer | consequence |
 |---|---|---|---|---|---|
 
+### Round 2
+
+| date | ticket | gate | item | answer (verbatim) | consequence | kind |
+|---|---|---|---|---|---|---|
+| 2026-09-10T01:00:00Z | T2 | G1 | budget | "go ahead" (chat) | recorder: budget released | decided |
+| 2026-09-10T01:05:00Z | T2 | G1 | all | "pre-approve everything for T2" (chat) | recorder: blanket rule | pre-authorization |
+
 ## PHASE LOG
 
 - 2026-09-09 · Ledger created by decompose-spec from `docs/spec.md`; 2 tickets, tail omitted in fixture.

@@ -34,6 +34,10 @@
 #     marker): orient region <= 12 KiB (warn > 8 KiB); CURRENT STATE lines <= 256 B with no
 #     `| PRIOR`; returnPass an id list; no other line begins with a CURRENT STATE key; the
 #     last `## ` heading is a PHASE LOG heading; its entries <= 2 KiB (older regions: warn)
+#   - GATE DECISIONS in the 7-column form (header has `kind`; guarded): each row's kind is
+#     decision | pre-authorization | confirmation | waiver | correction (BM-GATE-05), and a
+#     pre-authorization row carries `expires:` and `voided-by:` (BM-GATE-09). Legacy 6-column
+#     tables and bullet-style records are not judged.
 #   - warnings: projectStatus DONE without a signed readouts/GATE-ACCEPT.md; a seed ledger
 #     (PHASE LOG = the seed entry) whose GATE DECISIONS holds a non-pre-authorization row
 #   - REQ coverage (when canonicalSpec + req_id_pattern resolve): every id a ticket cites
@@ -437,6 +441,26 @@ if [ -f "$LEDGER" ]; then
   pl_nl="$(printf '%s' "$plog" | cut -f2)"; pl_no="$(printf '%s' "$plog" | cut -f4)"
   [ "${pl_nl:-0}" -gt 0 ] && guarded ledger-budget "LEDGER.md: $pl_nl PHASE LOG entr(y/ies) in the current region exceed 2 KiB (BM-LEDGER-06; lines:$(printf '%s' "$plog" | cut -f3))"
   [ "${pl_no:-0}" -gt 0 ] && warn ledger-budget "LEDGER.md: $pl_no PHASE LOG entr(y/ies) in older regions exceed 2 KiB (legacy; lines:$(printf '%s' "$plog" | cut -f5))"
+  # GATE DECISIONS rows in the 7-column form (BM-GATE-05, -09; guarded). Header-aware: a table row
+  # with a `consequence` cell is a header; the table is 7-column iff that header also has `kind`.
+  LC_ALL=C awk -F'|' '
+    function bare(x) { gsub(/[[:space:]`*]/, "", x); return x }
+    /^##[[:space:]]/ { ingd = ($0 ~ /^##[[:space:]]+GATE DECISIONS/); kc = 0; next }
+    ingd && /^\|/ {
+      if ($0 ~ /^\|[-|: ]+\|[[:space:]]*$/) next
+      hk = 0; hc = 0
+      for (i = 1; i <= NF; i++) { c = tolower(bare($i)); if (c == "kind") hk = i; if (c == "consequence") hc = i }
+      if (hc) { kc = hk; next }
+      if (!kc) next
+      k = bare($kc)
+      if (k !~ /^(decision|pre-authorization|confirmation|waiver|correction)$/) { print NR "\tkind\t" k; next }
+      if (k == "pre-authorization" && ($0 !~ /expires:/ || $0 !~ /voided-by:/)) print NR "\tpreauth\t"
+    }' "$LEDGER" | while IFS="$(printf '\t')" read -r gln gwhat gval; do
+    case "$gwhat" in
+      kind)    guarded gate "LEDGER.md line $gln: GATE DECISIONS kind '${gval:-<empty>}' is not one of decision | pre-authorization | confirmation | waiver | correction (BM-GATE-05)" ;;
+      preauth) guarded gate "LEDGER.md line $gln: a pre-authorization row lacks expires: and/or voided-by: (scoped pre-authorization, BM-GATE-09)" ;;
+    esac
+  done
   # Pre-answered gate? A seed ledger (only the seed PHASE LOG entry) has no GATE DECISIONS
   # rows except operator pre-authorizations (decompose-spec never answers a gate).
   if [ "${pl_entries:-0}" -le 1 ]; then

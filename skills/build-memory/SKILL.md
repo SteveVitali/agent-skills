@@ -65,7 +65,8 @@ no run line; markers referenced; DEFERRALS ids unique + valid statuses; no OPEN 
 PASSED gate; ADR files ↔ generated index; every ADR has `## Revisit trigger`; spec ADR
 appendix == file set when present; `LEDGER.md` key set + order and `nextTicket`; PHASE-LOG
 "done" ↔ `BUILD_INDEX` row + `runs/<ID>.md`; REQ→ticket coverage when the spec and
-`req_id_pattern` resolve; size + secret scans; the ledger budget and shape, BM-LEDGER-08). The
+`req_id_pattern` resolve; size + secret scans; the ledger budget and shape, BM-LEDGER-08; the
+`kind` of 7-column GATE DECISIONS rows and scoped pre-authorizations, BM-GATE-05/-09). The
 human summary lists each violation and warning; the JSON at `/tmp/build-memory-check.json`
 mirrors it. **A failure is a real block** — the caller does not proceed past it. *Guarded*
 rules warn unless `docs/build/README.md` also carries `<!-- build-memory-guards: 1 -->`
