@@ -4,6 +4,7 @@
 > then `docs/tickets/DEFERRALS.md`. Run the next chain row via `implement-spec`; a gate is a
 > pause, not a block. Resume line:
 > `implement-spec spec=docs/tickets/<nextTicket file> worktree=. base_branch=<chainTip>`
+> - Legacy ledger lived at `.agents/scratch/demo-build-ledger.md` (gitignored).
 > - Standing narrative line 000 that belongs in an archive, not in the orient region of the ledger head.
 > - Standing narrative line 001 that belongs in an archive, not in the orient region of the ledger head.
 > - Standing narrative line 002 that belongs in an archive, not in the orient region of the ledger head.

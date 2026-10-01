@@ -8,7 +8,7 @@
 ## CURRENT STATE
 
 ```
-projectStatus:   IN-PROGRESS
+projectStatus:   IN_PROGRESS
 nextTicket:      T2
 lastCompleted:   T1
 blockedOn:       (nothing)
@@ -46,6 +46,5 @@ updatedAt:       2026-09-09
 ## PHASE LOG
 
 - 2026-09-09 · Ledger created by decompose-spec from `docs/spec.md`; 2 tickets, tail omitted in fixture.
-- 2026-09-09 — T1 done — demo/t1-seed-schema · PR #1 · demo/build · seed the schema · **Verify:** tests green · **Deferrals:** none · **Deviations:** none · chainTip → demo/t1-seed-schema · next → T2
-- 2026-09-09 — **T9 extra done** — bolded legacy shape, no BUILD_INDEX row and no evidence file
-- 2099-01-01 — T2 blocked — a date later than the clock
+- 2026-09-09 · T1 done · demo/t1-seed-schema · PR #1 · demo/build · seed the schema · **Verify:** tests green · **Deferrals:** none · **Deviations:** none · chainTip → demo/t1-seed-schema · next → T2
+- 2026-09-10 · T2 done · demo/t2-wire · PR #2

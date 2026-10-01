@@ -2,7 +2,9 @@
   Template: docs/research-ledger.md (BM-SYNTH-01). Written by synthesize-spec mode=plan;
   driven row-by-row by mode=run; frozen at mode=ratify. Same ledger shape as the build:
   the CURRENT STATE block lets `drive-build.sh --skill synthesize-spec` run it. Living until
-  ratified, then frozen (a change-log line records the freeze).
+  ratified, then frozen (a change-log line records the freeze). One writer touches CURRENT
+  STATE and the change log; every stamp is `date -u` at writing (BM-CLOCK-01); check freshness
+  with `check-build-memory.sh --planning docs/research-ledger.md` (V14).
 -->
 # <build> — research & design ledger
 
@@ -26,7 +28,7 @@ specOut:         docs/<build>-spec.md
 memoryRoot:      docs
 autonomy:        (set by the driver)
 round:           1
-updatedAt:       <date -u +%FT%TZ, at writing>
+updatedAt:       <date -u +%FT%TZ, at writing>   # never older than the newest change-log stamp
 ```
 
 ## 0. Working theses (to be tested, not assumed)
@@ -55,4 +57,6 @@ updatedAt:       <date -u +%FT%TZ, at writing>
 | Q-1 | <open question for the operator> | | |
 
 ## Change log
-- <date -u +%F> — ledger created by synthesize-spec mode=plan.
+<!-- append-only; one line per edit, stamped from the clock at the moment of writing; a delegated answer is
+     recorded "agent-drafted, pending confirmation" until the operator confirms its exact text -->
+- <date -u +%FT%TZ, at writing> — ledger created by synthesize-spec mode=plan.

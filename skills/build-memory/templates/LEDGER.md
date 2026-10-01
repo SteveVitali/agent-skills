@@ -19,6 +19,9 @@
 > - **Orient (BM-ORIENT-01):** read `sed -n '1,/^## OPEN FINDINGS/p'` of this file, the RETURN PASS table, its last three PHASE LOG entries, and the next row's manifest line + contract header — never this file, DEFERRALS or BUILD_INDEX whole.
 > - **Clock (BM-CLOCK-01):** every date you write is `date -u` at that moment.
 > - **CI (BM-CI-01):** read the PR checks at every ticket boundary (`ci-boundary.sh --ledger <this file> --ticket <lastCompleted> --stack`); red, pending or unreadable → `blockedOn`; never stack on red.
+> - **Records (BM-HIST-01):** protected regions only gain lines, at their ends; run `check-build-memory.sh . --staged` before every closeout commit.
+> - **Harness (BM-HARNESS-01):** record `<harness>/<model-id>/<tier>` in `harness:` and every run-ledger header; a different harness or model is a switch — only at a boundary, on the operator's words.
+> - **Digest (BM-DIGEST-01):** `digest.sh --write` at every pause, session end and usage-limit event (+ the project's cadence); stop and ask on red CI, a date not from the clock, tentative words, an unlisted production change, a second human deferral, a harness change or a usage limit — silence is never consent.
 
 ## CURRENT STATE
 
@@ -68,6 +71,8 @@ updatedAt:       <date -u +%FT%TZ, at writing>
      `## PHASE LOG — Round <n>`. One entry per event, <= 2 KiB, no markup before the kind:
      `<date -u +%F> — <ID> <kind> — branch · PR · base · summary · **Verify:** … · **Deferrals:** … · **Deviations:** … · chainTip → … · next → …`
      with optional `· ci: … · layer: … · harness: …`. kind ∈ done | blocked | inserted | split | gate |
-     pause | round | correction | restored | repair | harness-switch | retroactive. -->
+     pause | round | correction | restored | repair | harness-switch | retroactive. A repair names its gap:
+     `repair — close: <what> (<worker>, why)` / `repair — ci: #<n> read pass`; a second close repair in a
+     round sets blockedOn. -->
 
 - <date -u +%F> — ROUND1 round — Ledger created by decompose-spec from `<spec>`; <N> tickets; tail=<minimal|full>; plan revisable at run time.

@@ -57,8 +57,10 @@ drives this from `docs/build/LEDGER.md`; a human can drive it by hand from this 
 - **Status layers (BM-STATUS-01).** Every status names its layer (engineered · fixture-verified · staging-verified · live-executed · public · human-completed); MET only at the requirement's own layer.
 - **Gate records (BM-GATE-05…09).** Operator words verbatim with `date -u` + channel; tentative words get a yes/no confirmation; no proxy signatures; agent-drafted text labelled and hash-confirmed; pre-authorizations list item ids, `expires:`, `voided-by:`.
 - **Production (BM-PROD-01).** No production mutation outside a ticket whose `Production mutations:` header names it (scripted path, pre-state capture, rollback).
-- **Tests (BM-TEST-01).** Tests assert invariants, never the current value of a living record.
-- **Harness (BM-HARNESS-01).** Harness + model id in every run-ledger header; a switch only at a ticket boundary, recorded.
+- **Tests (BM-TEST-01).** Tests assert invariants, never the current value of a living record; a failing pin is converted or deleted in its own commit, never relaxed.
+- **Harness (BM-HARNESS-01).** Harness + model id in CURRENT STATE `harness:` and every run-ledger header; commits trailered; a switch only at a ticket boundary, on the operator's words, recorded.
+- **Records (BM-HIST-01).** Protected records only gain lines, at their ends (`check-build-memory.sh --staged` before the closeout commit); corrections are new dated entries.
+- **Reporting (BM-DIGEST-01).** Progress lines name the layer reached; an operator digest at every pause and at the project's cadence; stop and ask rather than proceed on red CI, a date not from the clock, tentative words or a harness change.
 
 ## Out of scope
 <what no ticket does; the capstone verifies none crept in>
