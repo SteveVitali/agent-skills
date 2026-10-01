@@ -20,7 +20,7 @@ inputs:
     description: "'seed' (default): plan a fresh build and seed the layout. 'extend': add a re-planning round to an existing build — read the current ledger, DEFERRALS.md, research-ledger §Q and BACKLOG.csv, then append inserts/splits/rounds and (for a legacy ledger at CAPSTONE) the standard tail rows, without renaming history."
   - name: tail
     required: false
-    description: "The closeout tail appended when the chain has >1 implement-spec ticket: 'full' (default — CAP.1/CAP.2/CAP.3, GATE-ACCEPT, REC.1/REC.2/REC.3, DOC.1/DOC.2) or 'minimal' (CAP.1, CAP.3, DOC.1, DOC.2). 'none' is refused when N>1."
+    description: "The closeout tail appended when the chain has >1 implement-spec ticket: 'minimal' (default — CAP.1, CAP.3, GATE-ACCEPT, DOC: one docs row invoking refresh-repo-docs then agent-docs) or 'full' (CAP.1/CAP.2/CAP.3, GATE-ACCEPT, REC.1/REC.2/REC.3, DOC.1/DOC.2 — requires a ## Decomposition decisions line naming which REC rows read live state and why). 'none' is refused when N>1."
   - name: sequence_prefix
     required: false
     description: "Default true. Name ticket files with the NN[a-z]?_<ID>__<slug>.md global-sequence prefix so lexical order is chain order. Historical/legacy filenames a manifest chain table already lists are never renamed."
@@ -104,8 +104,11 @@ seams and dependencies.
 **In `mode=extend`** (a re-planning round on an existing build), also read the current build state before
 cutting: `docs/build/LEDGER.md` (what has landed, `chainTip`, `round`), `docs/tickets/DEFERRALS.md` (owed work
 that a new round may close), `docs/research-ledger.md` §Q (operator decisions), and `docs/build/BACKLOG.csv`
-(carried debt). The new round's tickets fork from the current `chainTip`; you append to the manifest's chain
-table and `## Plan extensions`, and never rename an existing ticket file (BM-COMPAT-05).
+(carried debt). Also read the open stack's CI state (`ci-boundary.sh --no-wait` — BM-CI-01, *forward: SK-01*;
+until it ships, `gh pr checks` on each open chain PR) and the latest operator digest under
+`docs/build/reports/digests/` if one exists (*forward: SK-08*), so a round is never planned on top of red PRs. The
+new round's tickets fork from the current `chainTip`; you open a new numbered round banner in the manifest's chain
+table, append under it and to `## Plan extensions`, and never rename an existing ticket file (BM-COMPAT-05).
 
 ---
 
@@ -146,7 +149,12 @@ Rules for filling it:
   quoted verbatim from the spec and recorded *before* the gated work begins). Neither is an `implement-spec`
   input: they do not advance `chainTip`. **A gate is a pause, not a block** — it is dispositioned by the operator
   (recorded in the ledger's GATE DECISIONS + a `readouts/GATE-G<k>.md`) and never guessed past; a pending gate is
-  a `RETURN PASS` row, not a `blockedOn`.
+  a `RETURN PASS` row, not a `blockedOn`. **HUMAN rows are scheduled like tickets:** each names an owner and a
+  target `date -u` or trigger ticket (BM-TICKET-05), and the tickets that depend on it list the claims they withhold.
+- **Never pre-answer a gate.** A decomposition records the gate and its pre-registered thresholds; it never writes
+  a `decision` row into GATE DECISIONS. An authorization the operator gives at planning time is recorded as a
+  `pre-authorization` row (the operator's words verbatim, explicit item ids, `expires:`, `voided-by:`) — never a
+  blanket rule (BM-LEDGER-04).
 - **Emit skeleton tickets after a gate where the body cannot be written yet** (BM-TICKET-03): `Kind: skeleton`,
   a `> Skeleton only` banner naming the gate, and only the header + `## Scope (one line)` + `## Spec §§` +
   `## REQ coverage`. A skeleton carries **no run line** — the validator refuses to run one and `implement-spec`
@@ -185,8 +193,10 @@ tickets directory (committed mode: `docs/tickets`; otherwise the gitignored scra
 `NN[a-z]?_<ID>__<slug>.md` when `sequence_prefix` is true (the global sequence, zero-padded so lexical order is
 chain order), else the legacy `T<nn>__<slug>.md` / `P<phase>.<k>__<slug>.md`. It carries the template's full
 header (sequence, phase, kind, `base_branch: current checkout`, depends-on, the literal `Run:` line, `Gate
-status`, `Live stage`) and body sections, ending with the universal phase-gate AC (BM-TICKET-02), so a fresh
-worker loads **one small file** and nothing else. Two disciplines make the layout safe:
+status`, `Live stage`, `Production mutations`, `Size budget`) and body sections — ACs tagged with the layer they
+must reach, a `## Operating clauses` section citing the manifest's `## Operating rules` — ending with the universal
+phase-gate AC (BM-TICKET-02), so a fresh worker loads **one small file** and nothing else. A ticket over its size
+budget is split here, before it is written. Two disciplines make the layout safe:
 
 - **Cite, don't copy.** A ticket file *cites* the spec's sections and requirement IDs; it never restates the
   design — a restated design forks the spec, and the drift arrives with the first amendment. To change a
@@ -238,10 +248,11 @@ scratch tickets dir); everything below still applies, minus the commit.
 **2. Write the state-only ledger** (`docs/build/LEDGER.md`, from the template, BM-LEDGER-01/02). It holds
 **state only — the manifest is the plan.** The `CURRENT STATE` fenced block carries exactly the keyset in layout
 order (`projectStatus … round … updatedAt`); seed `projectStatus: NOT_STARTED`, `nextTicket: SETUP`,
-`manifest: docs/tickets/00_MANIFEST.md`, `canonicalSpec`, `memoryRoot`, `round: 1`. Below it: empty
-`OPEN FINDINGS`, `GATE DECISIONS`, `RETURN PASS` tables, and a `PHASE LOG` with one seed entry (spec, ticket
-count, "the plan is revisable at run time"). **No PHASE PLAN / SETUP / CAPSTONE sections** — those moved to the
-manifest (the plan) and to tail tickets.
+`manifest: docs/tickets/00_MANIFEST.md`, `canonicalSpec`, `memoryRoot`, `round: 1`, `updatedAt` from `date -u`.
+Below it: empty `OPEN FINDINGS`, `RETURN PASS` tables, a `GATE DECISIONS` table holding nothing but
+`pre-authorization` rows (if the operator gave any), and, last, `## PHASE LOG — Round 1` with one seed entry
+(`ROUND1 round`: spec, ticket count, tail, "the plan is revisable at run time"). **No PHASE PLAN / SETUP /
+CAPSTONE sections** — those moved to the manifest (the plan) and to tail tickets.
 
 **3. Write the per-ticket contracts** (Phase 3) and the manifest.
 
@@ -249,14 +260,17 @@ manifest (the plan) and to tail tickets.
 makes the chain self-driving **without** the ledger: the three banners (committed contract record; cite-don't-copy
 with the spec amendment protocol; deferrals companion), a `companions:` line and an optional `req_id_pattern:`
 line, `## How to build` (the four rules + the run-line pattern), `## Human prerequisites`, `## The chain`
-(`| # | file | phase | kind | scope | gate |`, HUMAN/GATE marker and skeleton rows interleaved in order),
-`## Milestone gates`, `## Phase gates & ownership notes`, `## Cross-cutting invariants`, `## Out of scope`,
+(`| # | file | phase | kind | scope | gate |`, HUMAN/GATE marker and skeleton rows interleaved in order, every row
+under a numbered round banner `### Round <n>`; `mode=extend` opens the next banner and appends under it),
+`## Milestone gates`, `## Phase gates & ownership notes`, `## Cross-cutting invariants`, `## Operating rules`
+(the template's short forms plus the project's own OPERATING MODE rules), `## Out of scope`,
 `## Requirement-ID → ticket index`, `## Spec amendments applied`, `## Decomposition decisions` (incl. the Phase-4
 adversarial review record), `## Plan extensions`.
 
 **5. Append the tail** (BM-TAIL-01) when the chain has **more than one** implement-spec ticket: instantiate
-`build-memory`'s `templates/tail/` — `tail=full` (CAP.1, CAP.2, CAP.3, GATE-ACCEPT, REC.1, REC.2, REC.3, DOC.1,
-DOC.2) or `tail=minimal` (CAP.1, CAP.3, DOC.1, DOC.2) — filling the placeholders (`{{build_name}}`, `{{spec_path}}`,
+`build-memory`'s `templates/tail/` — `tail=minimal` (default: CAP.1, CAP.3, GATE-ACCEPT, DOC — CAP.3 then depends
+on CAP.1) or `tail=full` (CAP.1, CAP.2, CAP.3, GATE-ACCEPT, REC.1, REC.2, REC.3, DOC.1, DOC.2; record why in
+`## Decomposition decisions`) — filling the placeholders (`{{build_name}}`, `{{spec_path}}`,
 `{{req_id_pattern}}`, `{{ticket_count}}`, `{{last_ticket}}`). Each becomes an ordinary chain row (`kind` capstone
 | reconcile | docs). `tail=none` is refused when N > 1. The capstone is tickets — there is no CAPSTONE ledger
 section.
@@ -274,7 +288,7 @@ Ticket files **cite** the spec; they never copy the design (a restated design fo
 arrives with the first amendment). To change a requirement: **amend the source spec first**; bump its
 version/delta; requirement ids are **append-only**; add a `## Spec amendments applied` manifest line (date,
 section, before/after or pointer, approver); write an **ADR** when a design decision changes; then update the
-affected tickets' Load/AC lines (executed contracts get an appended `> Amended <date>:` note, never a rewrite).
+affected tickets' Load/AC lines (executed contracts get an appended `> Amended <date -u +%F>:` note, never a rewrite).
 
 ---
 

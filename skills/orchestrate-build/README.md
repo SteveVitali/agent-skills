@@ -125,7 +125,8 @@ so a chain that no one ever ran composed does not ship. It is also where the sea
 Since 0.2.0 the capstone is **tickets, not a special unit** (BM-TAIL-01): `decompose-spec` appends `CAP.1`
 (gap analysis), `CAP.2` (composed verification), `CAP.3` (closure), a `GATE-ACCEPT` signature marker, then the
 `REC.*` reconciliation and `DOC.*` docs rows, each an ordinary `implement-spec` contract the loop runs like any
-other ticket. The context-size argument that justifies per-ticket fresh contexts applies to the capstone too —
+other ticket. Since 0.3.0 that full tail is opt-in (`tail=full`); the default `tail=minimal` is `CAP.1`, `CAP.3`,
+`GATE-ACCEPT` and one `DOC` row. The context-size argument that justifies per-ticket fresh contexts applies to the capstone too —
 judging a whole build in one accumulating context is exactly the rot this design removes. The one-context
 procedure is retained verbatim in `modes/legacy-capstone.md` for `legacy_capstone=true` and for a legacy ledger
 that reaches `nextTicket: CAPSTONE` (which otherwise converts to the tail via `decompose-spec mode=extend`).

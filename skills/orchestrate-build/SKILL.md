@@ -228,18 +228,21 @@ way no human re-invocation is needed between green tickets.
 
 When a build has more than one ticket, `decompose-spec` appends the tail as **ordinary chain rows** the loop
 runs exactly like any other ticket (there is no special CAPSTONE unit): `CAP.1` capstone gap analysis
-(independent fresh context; the whole-build MET / MET-DIFFERENTLY / PARTIAL / MISSING / AT-RISK-INTEGRATION
-verdicts before reading any run ledger; `COVERAGE_MATRIX.csv`; seam hunt), `CAP.2` composed end-to-end
+(independent fresh context; the whole-build BM-VERDICT-01 verdicts — incl. MET-ENGINEERED and WAIVED — before
+reading any run ledger; `COVERAGE_MATRIX.csv`; seam hunt), `CAP.2` composed end-to-end
 verification (the whole build as one unit; env-blocked runs recorded and routed, never a fabricated green),
-`CAP.3` closure (close routed gaps on `<user>/<build>-capstone`; the ACCEPTED-deviations list), the
-`GATE-ACCEPT` marker (the operator signs the accepted-deviations list — run it as a gate per §2.1), then `REC.1`
-backlog + readiness, `REC.2` spec reconciliation, `REC.3` integration plan (each invokes `reconcile-build`), and
-`DOC.1`/`DOC.2` (invoke `refresh-repo-docs` / `agent-docs`). The independence, gap-hunt, and composed-verify
-rigor that used to live here now lives in those tickets' contracts (instantiated from `build-memory`'s
-`templates/tail/`); the loop just runs them.
+`CAP.3` closure (close routed gaps on `<user>/<build>-capstone`; two sums — MET-ENGINEERED never counted as
+MET — and the three-part list for signature), the `GATE-ACCEPT` marker (the operator signs that list — run it as
+a gate per §2.1), then `REC.1` backlog + readiness, `REC.2` spec reconciliation, `REC.3` integration plan (each
+invokes `reconcile-build`), and `DOC.1`/`DOC.2` (invoke `refresh-repo-docs` / `agent-docs`). That is
+`tail=full`; the default `tail=minimal` is `CAP.1`, `CAP.3`, `GATE-ACCEPT` and one `DOC` row. Every tail row
+cites the live state it describes (BM-TAIL-04). The independence, gap-hunt, and composed-verify rigor that used
+to live here now lives in those tickets' contracts (instantiated from `build-memory`'s `templates/tail/`); the
+loop just runs them.
 
 **Done (BM-TAIL-03).** `projectStatus: DONE` requires every chain row landed or consciously skipped (recorded),
-`BUILD_INDEX.md` complete, no `OPEN` deferral without a `landing`, and the `GATE-ACCEPT` readout signed. After
+`BUILD_INDEX.md` complete, no `OPEN` deferral without a `landing`, and the `GATE-ACCEPT` readout signed (every
+tail, minimal included). After
 the last tail row lands and those hold: set `projectStatus=DONE`, append a "DONE" PHASE LOG entry, and print the
 completion summary (every ticket + tail PR). **Await operator go-ahead before mutating anything.** A real
 unclosed gap or a regressing composed result sets `blockedOn` and does NOT advance to `DONE`.
