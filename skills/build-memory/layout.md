@@ -516,9 +516,11 @@ when the repo keeps one); (O4) any repo projection the OPERATING MODE names; (O5
 three PHASE LOG entries; (O6) the next row's manifest line and contract header — ≤ 48 KiB in
 all. The ledger's OPERATING MODE may give its own recipe; follow it. Workers still load their
 contract and the DEFERRALS rows it scopes. A head over budget, a path in it that does not
-exist, or a stale token (`.agents/scratch`, `gitignored`, `Do not resume until`, plus
-`docs/build/tools/record_policy/stale_tokens.txt`) is a finding to surface before dispatch
-(validator: guarded; the recipe's total over 48 KiB warns).
+exist (relative to the repo or to `docs/build/`), or a stale token (`.agents/scratch`,
+`gitignored`, `Do not resume until`, plus one per line in
+`docs/build/tools/record_policy/stale_tokens.txt`, where `!token` retires a default) is a
+finding to surface before dispatch (validator: guarded; the recipe's total over 48 KiB warns).
+A superseding note names what it retires without quoting a stale token.
 
 **Tests assert invariants, not living records (BM-TEST-01).**
 - A test may assert what holds at every commit: schema, vocabulary membership, uniqueness,

@@ -833,16 +833,22 @@ if [ -f "$LEDGER" ]; then
   missing=""; nmiss=0
   { grep -oE '`[^`[:space:]]+`' "$ORIENT" | tr -d '`'; lval manifest; lval canonicalSpec; lval memoryRoot; } 2>/dev/null \
     | sed -E 's/[#:][^/]*$//; s/[.,;)]+$//' | sort -u | while IFS= read -r p; do
-      case "$p" in ''|/*|~*|-*|*'://'*|*'<'*|*'>'*|*'{'*|*'}'*|*'*'*|*'$'*|*'='*) continue ;; esac
+      case "$p" in ''|/*|~*|-*|*'://'*|*'<'*|*'>'*|*'{'*|*'}'*|*'*'*|*'$'*|*'='*|*'…'*) continue ;; esac
       case "$p" in */*) : ;; *) continue ;; esac
       printf '%s' "$p" | grep -qE '(\.[A-Za-z0-9]{1,5}|/)$' || continue
-      [ -e "$REPO/$p" ] || printf '%s\n' "$p"
+      [ -e "$REPO/$p" ] || [ -e "$BUILD/$p" ] || printf '%s\n' "$p"
     done > "$ORIENT.miss"
   nmiss="$(grep -c . "$ORIENT.miss" 2>/dev/null)"; nmiss="${nmiss:-0}"
   [ "$nmiss" -gt 0 ] && guarded ledger-stale "LEDGER.md orient region names $nmiss repo path(s) that do not exist ($(head -3 "$ORIENT.miss" | tr '\n' ' ' | sed 's/ $//; s/ /, /g')) — stale orient text (BM-ORIENT-01, V3)" "docs/build/LEDGER.md"
   rm -f "$ORIENT.miss"
+  # Defaults + the repo's record_policy/stale_tokens.txt (one token per line; `!token` retires a default).
   STALE_TOK="$(newtmp)"; printf '%s\n' '.agents/scratch' 'gitignored' 'Do not resume until' > "$STALE_TOK"
-  [ -f "$BUILD/tools/record_policy/stale_tokens.txt" ] && sed -E 's/[[:space:]]*#.*$//; /^[[:space:]]*$/d' "$BUILD/tools/record_policy/stale_tokens.txt" >> "$STALE_TOK"
+  if [ -f "$BUILD/tools/record_policy/stale_tokens.txt" ]; then
+    sed -E 's/[[:space:]]+#.*$//; /^[[:space:]]*(#|$)/d' "$BUILD/tools/record_policy/stale_tokens.txt" > "$STALE_TOK.repo"
+    grep -v '^!' "$STALE_TOK.repo" >> "$STALE_TOK"
+    sed -n 's/^!//p' "$STALE_TOK.repo" | while IFS= read -r off; do grep -vxF -- "$off" "$STALE_TOK" > "$STALE_TOK.t"; mv "$STALE_TOK.t" "$STALE_TOK"; done
+    rm -f "$STALE_TOK.repo"
+  fi
   while IFS= read -r tok; do
     [ -n "$tok" ] || continue
     tl="$(grep -nF -- "$tok" "$ORIENT" | head -1 | cut -d: -f1)"

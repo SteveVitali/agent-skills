@@ -300,6 +300,15 @@ test_truth() {
   W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; L="$W/docs/build/LEDGER.md"
   printf -- '- 2026-09-09 — T1 repair — close: BUILD_INDEX row missing (worker x, interrupted)\n- 2026-09-10 — T2 repair — close: PHASE LOG entry missing (worker x)\n' >> "$L"
   out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; printf '%s' "$out" | grep -qF -- "2 'repair — close:' entries in the current PHASE LOG region but blockedOn is empty" || { fail "truth: two close repairs not warned"; ok=0; }
+  # stale orient text: paths resolve against the repo or the memory root; a repo can add tokens and retire a default
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; L="$W/docs/build/LEDGER.md"; printf '# spec\n' > "$W/docs/spec.md"
+  mkdir -p "$W/docs/build/tools/record_policy"
+  edit "$L" '/^## CURRENT STATE/ {print "> - Was gitignored; history in `runs/T1.md`; see `docs/old/plan.md`; the Codex hand-off is closed."; print ""} {print}'
+  printf 'Codex hand-off   # a repo token\n!gitignored\n' > "$W/docs/build/tools/record_policy/stale_tokens.txt"
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"
+  printf '%s' "$out" | grep -qF "names 1 repo path(s) that do not exist (docs/old/plan.md)" || { fail "truth: stale path not reported (or runs/T1.md not resolved under the memory root)"; ok=0; }
+  printf '%s' "$out" | grep -qF "carries the stale token 'Codex hand-off'" || { fail "truth: a repo stale token not reported"; ok=0; }
+  printf '%s' "$out" | grep -qF "stale token 'gitignored'" && { fail "truth: '!gitignored' did not retire the default"; ok=0; }
   # BUILD_INDEX shape: column count, duplicate seq, vocabulary (warnings)
   W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"
   printf '| 01 | T2 | ticket | demo/t2 | #2 | demo/t1 | 2026-09-09 | — | a|b | done-ish | runs/T2.md |\n' >> "$W/docs/build/BUILD_INDEX.md"

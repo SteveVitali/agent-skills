@@ -53,9 +53,9 @@ already holds.
   review); out-of-loop work gets a `retroactive` row first. Validator: two close repairs with `blockedOn` empty warn;
   chain rows outside a numbered `### Round <n>` banner warn (V13), and history mode fails a new one.
 - **SK-07 — orient within a byte budget.** BM-ORIENT-01 full text (O1–O6, ≤ 48 KiB) in `layout.md` and
-  `orchestrate-build` §0. Validator: stale orient paths and tokens (`.agents/scratch`, `gitignored`, `Do not resume
-  until`, + `record_policy/stale_tokens.txt`) and CURRENT STATE over 3 KiB are guarded; the orient probe (V11) warns
-  over 48 KiB.
+  `orchestrate-build` §0. Validator: stale orient paths (resolved against the repo or `docs/build/`) and tokens
+  (`.agents/scratch`, `gitignored`, `Do not resume until`, + `record_policy/stale_tokens.txt`, where `!token`
+  retires a default) and CURRENT STATE over 3 KiB are guarded; the orient probe (V11) warns over 48 KiB.
 - **SK-08 — layered progress, operator digest, stop-and-ask.** BM-DIGEST-01 full text. New
   `orchestrate-build/scripts/digest.sh` appends a digest to `docs/build/reports/digests/<date -u +%F>.md`
   (append-only) from what it can read — harness, ledger state, validator, the CI of every open chain PR, merges by
