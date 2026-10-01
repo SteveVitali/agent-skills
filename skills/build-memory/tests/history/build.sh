@@ -111,6 +111,14 @@ commit_at "$W" 2026-09-28T03:49:00Z "sign"; expect 0 "signing = Status line + ap
 new_case; printf 'Date correction: the Date 2026-10-19 recorded above is wrong → true ≤ 2026-09-28T03:49Z (git 95c8a73f committer time)\n' >> "$W/$RO"
 commit_at "$W" 2026-09-28T04:00:00Z "correct"; expect 0 "R3 correction line carrying the true date"
 
+# ── a closed run ledger only gains lines (3fd7104) ───────────────────────────
+new_case; printf -- '- **Closed:** 2026-09-27T11:00:00Z\n' >> "$W/docs/build/runs/T1.md"; commit_at "$W" 2026-09-27T12:30:00Z "close"; B0="$(git -C "$W" rev-parse HEAD)"
+edit "$W/docs/build/runs/T1.md" '{sub(/^Seeded the schema; unit test green\. PR #1\./, "Seeded the schema.")} {print}'
+commit_at "$W" 2026-09-28T03:00:00Z "rewrite"; expect 1 "3fd7104 closed run ledger rewritten" "[append-only]" "runs/T1.md"
+new_case; printf -- '- **Closed:** 2026-09-27T11:00:00Z\n' >> "$W/docs/build/runs/T1.md"; commit_at "$W" 2026-09-27T12:30:00Z "close"; B0="$(git -C "$W" rev-parse HEAD)"
+printf '\n> Note 2026-09-28: the PR merged as #1 (git 3f2a1c0).\n' >> "$W/docs/build/runs/T1.md"
+commit_at "$W" 2026-09-28T03:00:00Z "note"; expect 0 "closed run ledger with an appended note"
+
 # ── jsonl byte prefix (7a2ff9fa) ────────────────────────────────────────────
 J="$W/docs/build/reports/events.jsonl"
 new_case; J="$W/docs/build/reports/events.jsonl"; edit "$J" '{sub(/"id":1/, "\"id\":1,\"note\":\"x\"")} {print}'

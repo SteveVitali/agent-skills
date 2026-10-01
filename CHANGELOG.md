@@ -82,7 +82,7 @@ already holds.
   `check-build-memory.sh --range BASE..HEAD | --staged | --first-parent SHA`, plus `--replay FROM..TO` (a
   read-only backtest). BM-HIST-01 in `layout.md`: append-only + append position for the LEDGER's protected regions;
   living-archived head (byte-for-byte archive + pointer); DEFERRALS row-annotate (every cell's text survives; a new
-  leading status carries a new date); readouts change only `Status:`; BUILD_INDEX added rows (column count, seq,
+  leading status carries a new date); readouts change only `Status:`; a run ledger already `Closed:` only gains lines; BUILD_INDEX added rows (column count, seq,
   real PR); manifest append-only sections, id registry, V13; frozen executed contracts (`> Amended` only) and landed
   ADRs (`Superseded by ADR-NNN` only); `*.jsonl` byte prefix; digests append-only; record-date rules R1, R2, R3, R5,
   R6 on added lines with each line's own committer time; repo policy `docs/build/tools/record_policy/history.policy`
@@ -137,6 +137,17 @@ reconcile-build 19, lint 33 failing assertions), and every earlier test still pa
   and any `forward: SK-` stay retired; the SK-04/05/07/08/11/12/16/23/24/25 rules stay present; BM-HARNESS-01,
   BM-ORIENT-01, BM-TEST-01, BM-DIGEST-01, BM-HIST-01 resolve in `layout.md`; cited ids are checked across every
   build skill.
+
+**Replay over SIG** (read-only, `--replay` over the 479 first-parent commits to `b051732c`): every named B4 oracle
+commit is flagged with the expected rule — G1 from `305f94d5`; G2 position `307161ee`, `ddf3ad29`, `a33cd6ec`,
+`95c8a73f`, `4127dbf3`, `32bea406`, `b1250f62`; G4 `0a715fcc`, `95c8a73f`, `4127dbf3`, `3259ca81`; `c2055d96` at its
+first-parent merge `e2175c93` (56 lines). Of B2's 25 loss commits, 21 are flagged; the 4 others follow B6's
+narrower definitions (a run ledger rewritten before run ledgers carried `Closed:`; two contracts rewritten before
+their BUILD_INDEX row existed; one dated status flip that kept its text). The skill's defaults are stricter than
+B2's benign classes (placeholder fills, header status edits in landed ADRs, rewritten status cells), so 69 commits
+B2 judged benign are flagged; a repo whose own guard implements B2's modes (`docs/build/tools/memory_guard.*`) is
+delegated to and stays authoritative. Record-date positions are the build-memory ones by default (50 R1 commits;
+code, fixture, spec and sqitch positions come from repo policy).
 
 ### Not in this release (recorded, not done)
 - The cross-harness behavioural eval (B6 §6.6, trap scenarios T1–T5, N ≥ 3 per harness) — an agentic eval with

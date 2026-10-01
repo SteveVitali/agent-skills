@@ -6,7 +6,7 @@
 # contains, and a new violation fails the change that makes it:
 #   - append-only regions lose no line, and protected tables grow only at their end (append position);
 #   - DEFERRALS rows only grow (a status change appends a dated note); readouts change only their
-#     `Status:` line; executed contracts take only an appended `> Amended <date>:` note; landed ADRs
+#     `Status:` line; a run ledger already `Closed:` only gains lines; executed contracts take only an appended `> Amended <date>:` note; landed ADRs
 #     take only an appended `Superseded by ADR-NNN` line; `*.jsonl` keep their byte prefix;
 #   - the living LEDGER head is replaced only when the removed text is archived byte-for-byte in the
 #     same change (living-archived);
@@ -546,6 +546,10 @@ while IFS="$(printf '\t')" read -r st path; do
       done
       ;;
     runpr)
+      # a run ledger that was already Closed: at the base only gains lines (one honest closeout, BM-INDEX-02)
+      case "$path" in docs/build/runs/*)
+        at_base "$path" | grep -qE '^[[:space:]]*(-[[:space:]]*)?(\*\*)?Closed:' && judge_append_only_file "$path" "$R" append-only ;;
+      esac
       awk -F'\t' '$1 == "A" {print $2 "\t" $4}' "$R" | while IFS="$(printf '\t')" read -r hl txt; do
         printf '%s' "$txt" | grep -qE '^[[:space:]]*(-[[:space:]]*)?(\*\*)?(Date|Started|Closed|Landed|Recorded)(\*\*)?:' || continue
         d="$(printf '%s' "$txt" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9]{2}:[0-9]{2}(:[0-9]{2})?(Z|[+-][0-9]{2}:?[0-9]{2})?)?' | head -1)"

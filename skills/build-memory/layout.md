@@ -573,6 +573,7 @@ lines a change adds or removes**, so legacy records never fail for what they alr
 | LEDGER head (title, provenance, OPERATING MODE, CURRENT STATE) | living-archived: a CURRENT STATE value may change; other removed text is archived byte-for-byte under `reports/ledger-archive/` in the same change, with a pointer comment naming the file |
 | `DEFERRALS.md` rows | row-annotate: every old cell's text survives; a new leading status carries a date the row did not have |
 | `readouts/*` | append-only except the single `Status:` line (no in-place ticks, no deleted guard text) |
+| `runs/<ID>.md` once it carries `Closed:` | append-only (one honest closeout; a later fact is an appended dated note) |
 | `BUILD_INDEX.md` | append-only; an added row has the header's column count, a seq not used before and a real PR |
 | manifest `## Spec amendments applied`, `## Plan extensions`; chain table | append-only; a new chain row sits under a numbered `### Round <n>` banner (V13) and never re-binds an id to another slug |
 | executed contracts (the ticket has a BUILD_INDEX row at the base) | frozen; only an appended `> Amended <date -u +%F>:` note |
