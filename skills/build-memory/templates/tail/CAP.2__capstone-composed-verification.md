@@ -40,13 +40,17 @@ Exercise the composed build of {{ticket_count}} tickets end-to-end and record th
 - [ ] the composed path runs green, or every non-green is an xfail/skip whose reason starts with a `D-*` id *(deterministic)*
 - [ ] `COMPOSED_E2E_REPORT.md` records commands + observed signals for each composed scenario *(agentic)*
 - [ ] any environment block is recorded with what would close it and routed to the operator *(agentic)*
-- [ ] verification green; every new behaviour has a test that fails if it is removed; requirement ids stamped in the PR; anything not automatically verifiable is a `DEFERRALS.md` row with its compensating control; ADRs written for every deviation and owned decision; `BUILD_INDEX.md` row and `LEDGER.md` advanced. *(agentic — the universal phase-gate AC)*
+- [ ] *(live-read)* The artifact this row writes cites the live state it describes: the CI read of every open PR in the stack (`ci-boundary.sh` output once it ships — BM-CI-01; until then `gh pr checks <n>` with its `date -u`); where the build has a production surface, a probe-run record (id, `date -u`, result, sha256) no older than 24 h at the commit. A statement about production state with no such citation is removed, not written.
+- [ ] verification green; every new behaviour has a test that fails if it is removed; requirement ids stamped in the PR; anything not automatically verifiable is a `DEFERRALS.md` row with its compensating control; ADRs written for every deviation and owned decision; `BUILD_INDEX.md` row and `LEDGER.md` advanced; operating clauses met — dates from the clock, PR checks read and recorded, AC layers stated, no living-record pins, protected records only appended, gate words verbatim, harness in the run-ledger header. *(agentic — the universal phase-gate AC)*
 
 ## Requirement IDs to satisfy and stamp in the PR
 The composed-verification / integration ids of `{{spec_path}}` (matching `{{req_id_pattern}}`).
 
 ## Cross-cutting invariants
 - Cited from `docs/tickets/00_MANIFEST.md § Cross-cutting invariants`.
+
+## Operating clauses
+- Cited from `docs/tickets/00_MANIFEST.md § Operating rules`; the gap table has one row per clause.
 
 ## Notes
 - This ticket owns `COMPOSED_E2E_REPORT.md`. Never mutate canonical/production state; use

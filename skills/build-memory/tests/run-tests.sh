@@ -138,12 +138,169 @@ EOF
   [ "$ok" = 1 ] && say "PASS adr-index"
 }
 
+# ── Fixture 4: v2-legacy-ledger — pre-0.3.0 shapes still validate (SK-14, SK-18) ──
+test_legacy_ledger() {
+  local W; W="$(tmp)/repo"; cp -R "$HERE/v2-legacy-ledger" "$W"; gitify "$W"
+  local ok=1 out rc
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] || { fail "v2-legacy-ledger: check exit=$rc (want 0 — legacy content only warns)"; ok=0; }
+  for kw in "'| PRIOR'" "returnPass is not" "older regions exceed 2 KiB" "D-T2-2 (kind P" ; do
+    printf '%s' "$out" | grep -qF "$kw" || { fail "v2-legacy-ledger: output missing warning '$kw'"; ok=0; }
+  done
+  printf '%s' "$out" | grep -qF "D-T2-3 (kind P" && { fail "v2-legacy-ledger: scheduled P row D-T2-3 was flagged"; ok=0; }
+  [ "$ok" = 1 ] && say "PASS v2-legacy-ledger"
+}
+
+# ── Fixture 5: v2-guards-violations — the guards marker turns BM-LEDGER-08 into failures ──
+test_guards() {
+  local W; W="$(tmp)/repo"; cp -R "$HERE/v2-guards-violations" "$W"; gitify "$W"
+  local ok=1 out rc
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  [ "$rc" -eq 1 ] || { fail "v2-guards-violations: check exit=$rc (want 1)"; ok=0; }
+  for kw in "over the 12 KiB budget" "> 256 B" "'| PRIOR'" "not a PHASE LOG heading" "guards marker: on"; do
+    printf '%s' "$out" | grep -qF "$kw" || { fail "v2-guards-violations: output missing '$kw'"; ok=0; }
+  done
+  # the same tree without the marker only warns
+  grep -v 'build-memory-guards' "$W/docs/build/README.md" > "$W/r.tmp" && mv "$W/r.tmp" "$W/docs/build/README.md"
+  bash "$SCRIPTS/check-build-memory.sh" "$W" >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 0 ] || { fail "v2-guards-violations: without the marker exit=$rc (want 0)"; ok=0; }
+  [ "$ok" = 1 ] && say "PASS v2-guards-violations"
+}
+
+# ── LEDGER variants on v2-clean: harness slot, seed + DONE warnings, Status-line readouts ──
+edit() { awk "$2" "$1" > "$1.tmp" && mv "$1.tmp" "$1"; }   # edit <file> <awk program>
+test_ledger_variants() {
+  local ok=1 W L out rc
+  # harness: accepted only between round and updatedAt (SK-14)
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; L="$W/docs/build/LEDGER.md"
+  edit "$L" '/^updatedAt:/ {print "harness:         claude-code/model-x/manual"} {print}'
+  bash "$SCRIPTS/check-build-memory.sh" "$W" >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 0 ] || { fail "variants: harness in its slot exit=$rc (want 0)"; ok=0; }
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; L="$W/docs/build/LEDGER.md"
+  edit "$L" '{print} /^projectStatus:/ {print "harness:         claude-code/model-x/manual"}'
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  { [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -qF "out of order"; } || { fail "variants: harness out of its slot not rejected (exit=$rc)"; ok=0; }
+  # a seed ledger with a non-pre-authorization GATE DECISIONS row warns "pre-answered gate?" (SK-22)
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; L="$W/docs/build/LEDGER.md"
+  edit "$L" '/— T1 done —/ {next} {print} /^\|---\|---\|---\|---\|---\|---\|$/ && !d {print "| 2026-09-09 | T2 | G1 | all | \"proceed\" | pre-answered |"; d=1}'
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"
+  printf '%s' "$out" | grep -qF "pre-answered gate?" || { fail "variants: seed with a GATE DECISIONS answer not warned"; ok=0; }
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; L="$W/docs/build/LEDGER.md"
+  edit "$L" '/— T1 done —/ {next} {print}'
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"
+  printf '%s' "$out" | grep -qF "pre-answered gate?" && { fail "variants: empty seed GATE DECISIONS was warned"; ok=0; }
+  # DONE without a signed GATE-ACCEPT readout warns; a SIGNED Status line clears it (SK-20)
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; L="$W/docs/build/LEDGER.md"
+  edit "$L" '{sub(/^projectStatus:[[:space:]]+IN_PROGRESS/, "projectStatus:   DONE")} {print}'
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"
+  printf '%s' "$out" | grep -qF "GATE-ACCEPT.md is missing or not signed" || { fail "variants: DONE without GATE-ACCEPT not warned"; ok=0; }
+  mkdir -p "$W/docs/build/readouts"
+  sed -e 's/^Status: PENDING/Status: SIGNED/' "$HERE/../templates/READOUT.md" > "$W/docs/build/readouts/GATE-ACCEPT.md"
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"
+  printf '%s' "$out" | grep -qF "GATE-ACCEPT.md is missing or not signed" && { fail "variants: signed GATE-ACCEPT still warned"; ok=0; }
+  # a PENDING readout from templates/READOUT.md is not read as PASSED (its Status comment lists the values)
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; mkdir -p "$W/docs/build/readouts"
+  cp "$HERE/../templates/READOUT.md" "$W/docs/build/readouts/GATE-G1.md"
+  printf '| D-T2-9 | gated by GATE-G1 | pending | GATE-G1 | readout | none | OPEN |\n' >> "$W/docs/tickets/DEFERRALS.md"
+  bash "$SCRIPTS/check-build-memory.sh" "$W" >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 0 ] || { fail "variants: a PENDING template readout was read as PASSED (exit=$rc)"; ok=0; }
+  [ "$ok" = 1 ] && say "PASS ledger-variants"
+}
+
+# ── Template golden checks (SK-13, SK-14, SK-17..SK-20, SK-22) ──────────────────
+test_templates() {
+  local T="$HERE/../templates" DS="$HERE/../../decompose-spec/SKILL.md" LAY="$HERE/../layout.md" ok=1 f
+  # SK-13: no bare date placeholder anywhere in templates/
+  grep -rnE '<date>|<ISO date>' "$T" >/dev/null && { fail "templates: a bare <date> placeholder remains"; ok=0; }
+  # SK-17: the guard sentence is in every readout-bearing template
+  for f in READOUT.md GATE.md HUMAN.md tail/GATE-ACCEPT.md; do
+    tr '\n' ' ' < "$T/$f" | sed -E 's/[[:space:]>]+/ /g' | grep -qF "an agent must not sign or assume silence is approval" \
+      || { fail "templates: $f lacks the guard sentence"; ok=0; }
+  done
+  for kw in "**Owner:**" "**Scheduled:**" "**Withheld until done:**" "**Deferrals so far:**"; do
+    grep -qF "$kw" "$T/HUMAN.md" || { fail "templates: HUMAN.md lacks $kw"; ok=0; }
+  done
+  grep -qE '^Status: PENDING' "$T/READOUT.md" || { fail "templates: READOUT.md lacks the Status line"; ok=0; }
+  # SK-18: contract header + operating clauses; manifest operating rules + round banner; DEFERRALS rule 5
+  for kw in "**Production mutations:**" "**Size budget:**" "## Operating clauses" "layer: engineered"; do
+    grep -qF "$kw" "$T/ticket.md" || { fail "templates: ticket.md lacks '$kw'"; ok=0; }
+  done
+  grep -qE '^## Operating rules' "$T/MANIFEST.md" || { fail "templates: MANIFEST.md lacks ## Operating rules"; ok=0; }
+  grep -qE '^### Round 1 ' "$T/MANIFEST.md" || { fail "templates: MANIFEST.md lacks a round banner"; ok=0; }
+  grep -qF "5. **Human work is scheduled" "$T/DEFERRALS.md" || { fail "templates: DEFERRALS.md lacks rule 5"; ok=0; }
+  # SK-14: LEDGER seed — PHASE LOG — Round 1 last, 7-column GATE DECISIONS with no rows, harness slot
+  [ "$(grep -E '^## ' "$T/LEDGER.md" | tail -1)" = "## PHASE LOG — Round 1" ] || { fail "templates: LEDGER.md last heading is not '## PHASE LOG — Round 1'"; ok=0; }
+  grep -qF "| date | ticket | gate | item | answer (verbatim) | consequence | kind |" "$T/LEDGER.md" || { fail "templates: LEDGER.md GATE DECISIONS is not 7-column"; ok=0; }
+  [ "$(awk '/^## GATE DECISIONS/{f=1;next} /^## /{f=0} f && /^\|/' "$T/LEDGER.md" | wc -l | tr -d ' ')" = "2" ] || { fail "templates: LEDGER.md seed GATE DECISIONS is not empty"; ok=0; }
+  grep -qE '^harness:' "$T/LEDGER.md" || { fail "templates: LEDGER.md lacks the harness slot"; ok=0; }
+  grep -qF "| evidence | harness |" "$T/BUILD_INDEX.md" || { fail "templates: BUILD_INDEX.md lacks the harness column"; ok=0; }
+  # SK-19: matrix columns appended; verdict vocabulary; two sums
+  head -1 "$T/COVERAGE_MATRIX.csv" | grep -qE ',note,required_domain,achieved_domain,owed_legs,accepted_scope$' || { fail "templates: COVERAGE_MATRIX.csv columns not appended"; ok=0; }
+  for kw in "MET-ENGINEERED" "WAIVED" "owed_legs"; do grep -qF "$kw" "$T/tail/CAP.1__capstone-gap-analysis.md" || { fail "templates: CAP.1 lacks $kw"; ok=0; }; done
+  for kw in "*engineering closed*" "*requirement satisfied*"; do grep -qF "$kw" "$T/tail/CAP.3__capstone-closure.md" || { fail "templates: CAP.3 lacks $kw"; ok=0; }; done
+  grep -qF "never raises a verdict" "$T/tail/GATE-ACCEPT.md" || { fail "templates: GATE-ACCEPT lacks the scoped-acceptance rule"; ok=0; }
+  # SK-20: every tail file has a live-read AC; the minimal tail keeps GATE-ACCEPT (layout + decompose-spec)
+  for f in "$T"/tail/*.md; do grep -qF '*(live-read)*' "$f" || { fail "templates: $(basename "$f") lacks a (live-read) AC"; ok=0; }; done
+  grep -qF '`tail=minimal` (default: `CAP.1`, `CAP.3`, `GATE-ACCEPT`, `DOC`' "$LAY" || { fail "layout: minimal tail does not include GATE-ACCEPT"; ok=0; }
+  # SK-22: decompose-spec — minimal default incl. GATE-ACCEPT; never pre-answer; scheduled human rows; round banner
+  grep -qF "'minimal' (default" "$DS" || { fail "decompose-spec: tail default is not minimal"; ok=0; }
+  grep -qF "CAP.1, CAP.3, GATE-ACCEPT, DOC" "$DS" || { fail "decompose-spec: minimal tail lacks GATE-ACCEPT"; ok=0; }
+  for kw in "Never pre-answer a gate" "HUMAN rows are scheduled like tickets" "round banner" "## Operating rules"; do
+    grep -qF "$kw" "$DS" || { fail "decompose-spec: lacks '$kw'"; ok=0; }
+  done
+  # forward-referenced rule ids cited by the templates resolve in layout.md
+  for id in BM-CLOCK-01 BM-CI-01 BM-STATUS-01 BM-VERDICT-01 BM-PROD-01 BM-TEST-01 BM-HARNESS-01 BM-ORIENT-01 BM-LEDGER-08 BM-TAIL-04 BM-COMPAT-06; do
+    grep -qF "$id" "$LAY" || { fail "layout: rule id $id is cited but not defined"; ok=0; }
+  done
+  [ "$ok" = 1 ] && say "PASS templates"
+}
+
+# ── A seed instantiated from the templates validates clean under the guards marker ──
+test_seed_from_templates() {
+  local T="$HERE/../templates" W ok=1 out rc
+  W="$(tmp)/repo"; mkdir -p "$W/docs/build/logs" "$W/docs/build/readouts" "$W/docs/tickets" "$W/docs/adr"
+  { cat "$T/build-README.md"; printf '<!-- build-memory-guards: 1 -->\n'; } > "$W/docs/build/README.md"
+  cp "$T/LEDGER.md" "$W/docs/build/LEDGER.md"; cp "$T/BUILD_INDEX.md" "$W/docs/build/BUILD_INDEX.md"
+  cp "$T/READOUT.md" "$W/docs/build/readouts/_TEMPLATE.md"
+  printf '*\n!.gitignore\n' > "$W/docs/build/logs/.gitignore"
+  sed -e 's/`01_<ID>__<slug>\.md`/`01_T1__demo.md`/' "$T/MANIFEST.md" > "$W/docs/tickets/00_MANIFEST.md"
+  sed -e 's/<ID>/T1/g' "$T/ticket.md" > "$W/docs/tickets/01_T1__demo.md"
+  cp "$T/ticket.md" "$W/docs/tickets/_TEMPLATE.md"; cp "$T/DEFERRALS.md" "$W/docs/tickets/DEFERRALS.md"
+  cp "$T/adr-TEMPLATE.md" "$W/docs/adr/_TEMPLATE.md"; bash "$SCRIPTS/adr-index.sh" "$W/docs/adr" >/dev/null 2>&1
+  gitify "$W"
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] || { fail "seed-from-templates: check exit=$rc (want 0)"; printf '%s\n' "$out" | sed 's/^/      /'; ok=0; }
+  printf '%s' "$out" | grep -qF "(0 warning(s))" || { fail "seed-from-templates: a fresh seed raised warnings"; printf '%s\n' "$out" | sed 's/^/      /'; ok=0; }
+  [ "$ok" = 1 ] && say "PASS seed-from-templates"
+}
+
+# ── Clock: migrate records the UTC date in any local timezone (SK-13) ──────────
+test_clock_tz() {
+  local ok=1 tz W want
+  for tz in Pacific/Kiritimati Pacific/Pago_Pago; do
+    W="$(tmp)/repo"; cp -R "$HERE/legacy-scratch" "$W"; gitify "$W"
+    want="$(date -u +%Y-%m-%d)"
+    TZ="$tz" bash "$SCRIPTS/migrate-legacy-scratch.sh" --from "$W/.agents/scratch" --apply >/dev/null 2>&1 \
+      || { fail "clock: migrate --apply failed under TZ=$tz"; ok=0; continue; }
+    grep -q "migrate\` on $want\." "$W/docs/build/README.md" \
+      || grep -q "migrate\` on $(date -u +%Y-%m-%d)\." "$W/docs/build/README.md" \
+      || { fail "clock: migrate under TZ=$tz did not record the UTC date $want"; ok=0; }
+  done
+  [ "$ok" = 1 ] && say "PASS clock-tz"
+}
+
 say "build-memory self-test"
 test_clean
 test_violations
 test_legacy
 test_memory_root
 test_adr_index
+test_legacy_ledger
+test_guards
+test_ledger_variants
+test_templates
+test_seed_from_templates
+test_clock_tz
 
 if [ "$FAIL" -eq 0 ]; then
   say "ALL PASS"

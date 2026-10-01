@@ -33,8 +33,11 @@ seam hunt that a per-ticket gap analysis structurally cannot see.
 
 ## In scope — deliverables
 1. `docs/build/COVERAGE_MATRIX.csv` — one row per requirement id, columns EXACTLY:
-   `id, level, spec_section, class, verdict, evidence, owning_tickets, tests, adrs, routing, note`.
-   `verdict` ∈ MET / MET-DIFFERENTLY / PARTIAL / MISSING / AT-RISK-INTEGRATION; `evidence` is
+   `id, level, spec_section, class, verdict, evidence, owning_tickets, tests, adrs, routing, note,
+   required_domain, achieved_domain, owed_legs, accepted_scope` (the last four appended, never
+   renamed). `verdict` ∈ BM-VERDICT-01: MET / MET-DIFFERENTLY(ADR-nnn|RISK-id) /
+   MET-ENGINEERED(D-id;…) / PARTIAL / MISSING / AT-RISK-INTEGRATION / WAIVED(ADR-nnn) /
+   N/A-RATIONALE, parameters `;`-separated; domains are BM-STATUS-01 layer words; `evidence` is
    never blank for MET or MET-DIFFERENTLY (a `path:line`, a test node id, or an ADR id).
 2. `docs/build/CAPSTONE_GAP_ANALYSIS.md` — method + commands; a roll-up by verdict and by
    requirement family; the **seam hunt** (inter-ticket seams, dual-owned fields, cross-cutting
@@ -49,8 +52,13 @@ seam hunt that a per-ticket gap analysis structurally cannot see.
 ## Acceptance criteria
 - [ ] every requirement id matching `{{req_id_pattern}}` has exactly one matrix row with a verdict *(deterministic)*
 - [ ] every MET / MET-DIFFERENTLY row cites concrete evidence (path:line / test / ADR) *(deterministic)*
+- [ ] every MET-DIFFERENTLY row names an existing ADR or RISK row that names the id *(deterministic)*
+- [ ] every MET-ENGINEERED row has non-empty `owed_legs`, each an OPEN/PARTIAL D-row that names the id *(deterministic)*
+- [ ] no MET row cites an OPEN/PARTIAL D-row, and `achieved_domain ≥ required_domain` for every MET row *(deterministic)*
+- [ ] every WAIVED row names an accepted ADR that quotes the operator verbatim and has a `## Revisit trigger` *(deterministic)*
 - [ ] the verdicts were recorded before any `docs/build/runs/*` was read (stated in the report) *(agentic)*
-- [ ] verification green; every new behaviour has a test that fails if it is removed; requirement ids stamped in the PR; anything not automatically verifiable is a `DEFERRALS.md` row with its compensating control; ADRs written for every deviation and owned decision; `BUILD_INDEX.md` row and `LEDGER.md` advanced. *(agentic — the universal phase-gate AC)*
+- [ ] *(live-read)* The artifact this row writes cites the live state it describes: the CI read of every open PR in the stack (`ci-boundary.sh` output once it ships — BM-CI-01; until then `gh pr checks <n>` with its `date -u`); where the build has a production surface, a probe-run record (id, `date -u`, result, sha256) no older than 24 h at the commit. A statement about production state with no such citation is removed, not written.
+- [ ] verification green; every new behaviour has a test that fails if it is removed; requirement ids stamped in the PR; anything not automatically verifiable is a `DEFERRALS.md` row with its compensating control; ADRs written for every deviation and owned decision; `BUILD_INDEX.md` row and `LEDGER.md` advanced; operating clauses met — dates from the clock, PR checks read and recorded, AC layers stated, no living-record pins, protected records only appended, gate words verbatim, harness in the run-ledger header. *(agentic — the universal phase-gate AC)*
 
 ## Requirement IDs to satisfy and stamp in the PR
 The capstone/gap-analysis ids of `{{spec_path}}` (matching `{{req_id_pattern}}`).
@@ -58,6 +66,10 @@ The capstone/gap-analysis ids of `{{spec_path}}` (matching `{{req_id_pattern}}`)
 ## Cross-cutting invariants
 - Cited from `docs/tickets/00_MANIFEST.md § Cross-cutting invariants` — the matrix re-checks each.
 
+## Operating clauses
+- Cited from `docs/tickets/00_MANIFEST.md § Operating rules`; the gap table has one row per clause.
+
 ## Notes
-- This ticket owns `COVERAGE_MATRIX.csv`'s column set and the verdict vocabulary; downstream
-  tickets consume them by name and never rename columns.
+- This ticket owns `COVERAGE_MATRIX.csv`'s column set and applies the BM-VERDICT-01 vocabulary;
+  downstream tickets consume them by name and never rename columns. A scoped operator
+  acceptance never raises a verdict (`accepted_scope` set ⇒ verdict ≤ MET-ENGINEERED).

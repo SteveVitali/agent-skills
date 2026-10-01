@@ -26,7 +26,7 @@ specOut:         docs/<build>-spec.md
 memoryRoot:      docs
 autonomy:        (set by the driver)
 round:           1
-updatedAt:       <date>
+updatedAt:       <date -u +%FT%TZ, at writing>
 ```
 
 ## 0. Working theses (to be tested, not assumed)
@@ -55,4 +55,4 @@ updatedAt:       <date>
 | Q-1 | <open question for the operator> | | |
 
 ## Change log
-- <date> — ledger created by synthesize-spec mode=plan.
+- <date -u +%F> — ledger created by synthesize-spec mode=plan.

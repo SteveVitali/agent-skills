@@ -23,11 +23,19 @@
 #   - skeletons: Kind: skeleton has NO Run: line
 #   - DEFERRALS.md: ids unique; a canonical status {OPEN,PARTIAL,DONE,WONTFIX,ACCEPTED-SKELETON}
 #     appears as a word in each row's last cell (markdown/prose around it tolerated);
-#     no OPEN row scoped to a gate whose readout says PASSED
+#     no OPEN row scoped to a gate whose readout says PASSED (a readout's `Status:` line,
+#     when present, decides); warn: an OPEN/PARTIAL kind-P row lacks owner:/trigger: (rule 5)
 #   - ADRs: files <-> generated index (regenerate + diff); every ADR has ## Revisit trigger;
 #     spec ADR appendix equals the file set when a spec+appendix is resolvable
-#   - LEDGER.md: the CURRENT STATE key set present and in order; nextTicket names a chain
-#     row or DONE; every PHASE LOG "done" ticket has a BUILD_INDEX row and runs/<ID>.md
+#   - LEDGER.md: the CURRENT STATE key set present and in order (optional `harness` only
+#     between round and updatedAt); nextTicket names a chain row or DONE; every PHASE LOG
+#     "done" ticket has a BUILD_INDEX row and runs/<ID>.md
+#   - LEDGER.md budget + shape (BM-LEDGER-08; guarded — warn, or fail under the guards
+#     marker): orient region <= 12 KiB (warn > 8 KiB); CURRENT STATE lines <= 256 B with no
+#     `| PRIOR`; returnPass an id list; no other line begins with a CURRENT STATE key; the
+#     last `## ` heading is a PHASE LOG heading; its entries <= 2 KiB (older regions: warn)
+#   - warnings: projectStatus DONE without a signed readouts/GATE-ACCEPT.md; a seed ledger
+#     (PHASE LOG = the seed entry) whose GATE DECISIONS holds a non-pre-authorization row
 #   - REQ coverage (when canonicalSpec + req_id_pattern resolve): every id a ticket cites
 #     exists in the spec; every in-scope id has exactly one owner
 #   - size + secrets: fixtures >1MB / any file >5MB under docs/build flagged; no secret
@@ -41,6 +49,9 @@
 #   0 — clean (build-memory repo, no violations)
 #   1 — violations found
 #   2 — not a build-memory repo (no docs/build/README.md marker)
+#
+# Guards marker (BM-COMPAT-06): a line `<!-- build-memory-guards: 1 -->` alone in
+# docs/build/README.md turns the guarded checks from warnings into violations.
 #
 # Read-only: never writes or mutates the repo (only /tmp/build-memory-check.json).
 # Compatible with bash 3.2+ (macOS default). No associative arrays, no mapfile.
@@ -67,6 +78,10 @@ VIOL="$(mktemp)"; WARN="$(mktemp)"
 trap 'rm -f "$VIOL" "$WARN" 2>/dev/null' EXIT
 viol() { printf '%s\t%s\n' "$1" "$2" >> "$VIOL"; }      # <check>\t<message>
 warn() { printf '%s\t%s\n' "$1" "$2" >> "$WARN"; }
+# Guarded rules warn without the guards marker and fail with it (BM-COMPAT-06).
+GUARDS=0
+grep -qE '^[[:space:]]*<!-- build-memory-guards: 1 -->[[:space:]]*$' "$BUILD/README.md" 2>/dev/null && GUARDS=1
+guarded() { if [ "$GUARDS" -eq 1 ]; then viol "$1" "$2"; else warn "$1" "$2"; fi; }
 
 # Ticket-id grammar (canonical interpretation of BM-LAYOUT-02; documented in layout.md).
 # GATE-ACCEPT is the one named gate marker (the operator's accepted-deviations signature, BM-TAIL-01).
@@ -240,11 +255,41 @@ if [ -f "$DEF" ]; then
     done
   fi
   rm -f "$DEF_IDS" 2>/dev/null
-  # no OPEN row scoped to a gate whose readout says PASSED
+  # P (human-prerequisite) rows still owed must be scheduled: owner: + trigger: in
+  # `unblocked by` (DEFERRALS rule 5). Warning only in tree mode — failing rows ADDED under
+  # the guards marker needs history mode (forward: SK-16). Header-aware: each table's own
+  # `kind` / `unblocked by` columns are located from its `| id | … |` header row.
+  LC_ALL=C awk -F'|' '
+    function trim(x) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", x); return x }
+    /^\|[[:space:]]*id[[:space:]]*\|/ {
+      kc = 0; uc = 0
+      for (i = 1; i <= NF; i++) { c = tolower(trim($i)); if (c == "kind") kc = i; if (c == "unblocked by") uc = i }
+      next
+    }
+    /^\|[[:space:]]*D-/ && kc {
+      k = $kc; gsub(/[[:space:]*`_]/, "", k); if (k != "P") next
+      last = ""; for (i = NF; i >= 1; i--) if (trim($i) != "") { last = $i; break }
+      s = toupper(last); gsub(/[^A-Z-]+/, " ", s); s = " " s " "
+      if (!index(s, " OPEN ") && !index(s, " PARTIAL ")) next
+      cell = uc ? $uc : $0
+      if (cell !~ /owner:/ || cell !~ /trigger:/) print trim($2)
+    }' "$DEF" 2>/dev/null | while IFS= read -r pid; do
+    [ -n "$pid" ] && warn deferrals "DEFERRALS row $pid (kind P, still owed) has no owner:/trigger: in 'unblocked by' (rule 5: human work is scheduled)"
+  done
+  # no OPEN row scoped to a gate whose readout says PASSED. A readout with a `Status:` line
+  # (templates/READOUT.md) is judged by that line alone, comments stripped; older readouts
+  # by the legacy whole-file match.
   if [ -d "$BUILD/readouts" ]; then
     for ro in "$BUILD"/readouts/GATE-*.md; do
       [ -f "$ro" ] || continue
-      if grep -qiE 'verdict:?[[:space:]]*PASSED|^PASSED|\bPASSED\b' "$ro"; then
+      ro_passed=0
+      ro_status="$(grep -m1 -E '^Status:' "$ro" 2>/dev/null | sed -E 's/<!--.*-->//g')"
+      if [ -n "$ro_status" ]; then
+        printf '%s' "$ro_status" | grep -qwE 'PASSED' && ro_passed=1
+      elif grep -qiE 'verdict:?[[:space:]]*PASSED|^PASSED|\bPASSED\b' "$ro"; then
+        ro_passed=1
+      fi
+      if [ "$ro_passed" -eq 1 ]; then
         g="$(basename "$ro" .md)"   # e.g. GATE-G1
         if grep -E '^\|[[:space:]]*D-' "$DEF" | grep -iE '\bOPEN\b' | grep -qF "$g"; then
           viol deferrals "an OPEN DEFERRALS row references $g whose readout says PASSED"
@@ -286,6 +331,8 @@ fi
 
 # ── 7. LEDGER key order + nextTicket + PHASE LOG done coverage ───────────────
 EXPECTED_KEYS="projectStatus nextTicket lastCompleted blockedOn pauseRequested returnPass manifest canonicalSpec memoryRoot dispatchTarget buildWorktree buildBranchBase pinnedBaseSha chainTip benchmarkSet autonomy mergePolicy round updatedAt"
+# The optional `harness` key (BM-LEDGER-02) is accepted only in its slot, between round and updatedAt.
+EXPECTED_KEYS_H="$(printf '%s' "$EXPECTED_KEYS" | sed -E 's/ round updatedAt$/ round harness updatedAt/')"
 if [ -f "$LEDGER" ]; then
   # keys inside the CURRENT STATE fenced block, in file order
   got="$(awk '
@@ -296,8 +343,8 @@ if [ -f "$LEDGER" ]; then
     }
   ' "$LEDGER" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
   exp="$(printf '%s' "$EXPECTED_KEYS" | sed -E 's/[[:space:]]+/ /g')"
-  if [ "$got" != "$exp" ]; then
-    viol ledger "LEDGER.md CURRENT STATE keys are missing or out of order (expected: $exp)"
+  if [ "$got" != "$exp" ] && [ "$got" != "$EXPECTED_KEYS_H" ]; then
+    viol ledger "LEDGER.md CURRENT STATE keys are missing or out of order (expected: $exp; optional 'harness' only between round and updatedAt)"
   fi
   nt="$(lval nextTicket)"
   if [ -n "$nt" ] && [ "$nt" != "DONE" ] && [ "$nt" != "SETUP" ]; then
@@ -321,6 +368,104 @@ if [ -f "$LEDGER" ]; then
       viol index "PHASE LOG marks $tid done but neither docs/build/runs/$tid.md nor pr/$tid.md exists (no evidence file)"
     fi
   done
+fi
+
+# ── 7b. LEDGER budget + shape (BM-LEDGER-06/08, guarded) + tail/seed warnings ──
+if [ -f "$LEDGER" ]; then
+  # Orient region: line 1 up to (not including) the first "## OPEN FINDINGS" heading.
+  head_b="$(LC_ALL=C awk '/^##[[:space:]]+OPEN FINDINGS/ {exit} {print}' "$LEDGER" | wc -c | tr -d ' ')"
+  case "$head_b" in ''|*[!0-9]*) head_b=0 ;; esac
+  if [ "$head_b" -gt 12288 ]; then
+    guarded ledger-budget "LEDGER.md orient region (line 1 → ## OPEN FINDINGS) is $head_b B, over the 12 KiB budget (BM-LEDGER-08)"
+  elif [ "$head_b" -gt 8192 ]; then
+    warn ledger-budget "LEDGER.md orient region is $head_b B, above the 8 KiB warning level (budget 12 KiB, BM-LEDGER-08)"
+  fi
+  # CURRENT STATE: values only — each key line <= 256 B, no `| PRIOR` history.
+  LC_ALL=C awk -v keys=" $EXPECTED_KEYS harness " '
+    /^##[[:space:]]+CURRENT STATE/ {inblk=1; next}
+    inblk && /^##[[:space:]]/ {inblk=0}
+    inblk && /^[[:space:]]*[A-Za-z][A-Za-z0-9]*:([[:space:]]|$)/ {
+      k=$0; sub(/^[[:space:]]*/,"",k); sub(/:.*/,"",k)
+      if (index(keys, " " k " ")) print k "\t" length($0) "\t" ($0 ~ /\|[[:space:]]*\**PRIOR/ ? 1 : 0)
+    }' "$LEDGER" | while IFS="$(printf '\t')" read -r k len prior; do
+    [ -n "$k" ] || continue
+    [ "$len" -gt 256 ] 2>/dev/null && guarded ledger-budget "LEDGER.md CURRENT STATE '$k' line is $len B (> 256 B; values only, BM-LEDGER-08)"
+    [ "$prior" = "1" ] && guarded ledger-budget "LEDGER.md CURRENT STATE '$k' carries '| PRIOR' history (values only; git + PHASE LOG carry history, BM-LEDGER-08)"
+  done
+  # returnPass is a comma-separated id list (or "(none)").
+  rp="$(lval returnPass)"
+  case "$rp" in ''|'(none)'|none|'(nothing)') : ;; *)
+    printf '%s' "$rp" | grep -qE "^${ID_RE}([[:space:]]*,[[:space:]]*${ID_RE})*$" \
+      || guarded ledger-budget "LEDGER.md returnPass is not a comma-separated ticket-id list (BM-LEDGER-08)" ;;
+  esac
+  # No line outside CURRENT STATE begins with a CURRENT STATE key name (readers take the first match).
+  dupk="$(LC_ALL=C awk -v keys=" $EXPECTED_KEYS harness " '
+    /^##[[:space:]]+CURRENT STATE/ {inblk=1; next}
+    inblk && /^##[[:space:]]/ {inblk=0}
+    !inblk && /^[[:space:]]*[A-Za-z][A-Za-z0-9]*:/ {
+      k=$0; sub(/^[[:space:]]*/,"",k); sub(/:.*/,"",k)
+      if (index(keys, " " k " ")) { n++; if (n == 1) first = NR " (" k ")" }
+    }
+    END { if (n) print n "\t" first }' "$LEDGER")"
+  if [ -n "$dupk" ]; then
+    guarded ledger-budget "LEDGER.md: $(printf '%s' "$dupk" | cut -f1) line(s) outside CURRENT STATE begin with a CURRENT STATE key name (first: line $(printf '%s' "$dupk" | cut -f2)) (BM-LEDGER-08)"
+  fi
+  # One append target: the last "## " heading is a PHASE LOG heading (BM-LEDGER-06).
+  last_h="$(grep -E '^##[[:space:]]' "$LEDGER" | tail -1)"
+  if grep -qE '^##[[:space:]]+PHASE LOG' "$LEDGER"; then
+    if ! printf '%s' "$last_h" | grep -qE '^##[[:space:]]+PHASE LOG([[:space:]]|$)' \
+       || printf '%s' "$last_h" | grep -qE '^##[[:space:]]+PHASE LOG[[:space:]]+INDEX'; then
+      guarded ledger-budget "LEDGER.md: the last region is '$last_h', not a PHASE LOG heading — new entries go only at the end of the file (BM-LEDGER-06)"
+    fi
+  fi
+  # PHASE LOG entries <= 2 KiB: guarded in the last (current) PHASE LOG region; a warning in older regions.
+  # Also counts the entries, for the seed check below.
+  plog="$(LC_ALL=C awk '
+    function flush() { if (cur && sz > 2048) { ov++; ovl[ov] = cur; ovr[ov] = region } cur = 0; sz = 0 }
+    /^##[[:space:]]/ { flush(); inlog = ($0 ~ /^##[[:space:]]+PHASE LOG/ && $0 !~ /^##[[:space:]]+PHASE LOG[[:space:]]+INDEX/); if (inlog) region++; next }
+    inlog && /^- / { flush(); cur = NR; sz = length($0) + 1; entries++; next }
+    inlog && cur && /^[[:space:]]*$/ { flush(); next }
+    inlog && cur { sz += length($0) + 1; next }
+    END {
+      flush()
+      for (i = 1; i <= ov; i++) {
+        if (ovr[i] == region) { nl++; if (nl <= 5) ll = ll " " ovl[i] } else { no++; if (no <= 5) lo = lo " " ovl[i] }
+      }
+      print entries + 0 "\t" nl + 0 "\t" ll "\t" no + 0 "\t" lo
+    }' "$LEDGER")"
+  pl_entries="$(printf '%s' "$plog" | cut -f1)"
+  pl_nl="$(printf '%s' "$plog" | cut -f2)"; pl_no="$(printf '%s' "$plog" | cut -f4)"
+  [ "${pl_nl:-0}" -gt 0 ] && guarded ledger-budget "LEDGER.md: $pl_nl PHASE LOG entr(y/ies) in the current region exceed 2 KiB (BM-LEDGER-06; lines:$(printf '%s' "$plog" | cut -f3))"
+  [ "${pl_no:-0}" -gt 0 ] && warn ledger-budget "LEDGER.md: $pl_no PHASE LOG entr(y/ies) in older regions exceed 2 KiB (legacy; lines:$(printf '%s' "$plog" | cut -f5))"
+  # Pre-answered gate? A seed ledger (only the seed PHASE LOG entry) has no GATE DECISIONS
+  # rows except operator pre-authorizations (decompose-spec never answers a gate).
+  if [ "${pl_entries:-0}" -le 1 ]; then
+    gd_rows="$(LC_ALL=C awk -F'|' '
+      /^##[[:space:]]/ { ingd = ($0 ~ /^##[[:space:]]+GATE DECISIONS/); hdr = 0; next }
+      ingd && /^\|/ {
+        if (!hdr) { hdr = 1; next }
+        if ($0 ~ /^\|[-|: ]+\|[[:space:]]*$/) next
+        if ($0 ~ /^\|[[:space:]]*date[[:space:]]*\|/) next
+        last = ""; for (i = NF; i >= 1; i--) { c = $i; gsub(/[[:space:]`*]/, "", c); if (c != "") { last = c; break } }
+        if (last != "pre-authorization") n++
+      }
+      END { print n + 0 }' "$LEDGER")"
+    [ "${gd_rows:-0}" -gt 0 ] && warn gate "LEDGER.md is a seed (PHASE LOG holds only the seed entry) but GATE DECISIONS has $gd_rows non-pre-authorization row(s) — pre-answered gate?"
+  fi
+  # DONE requires a signed GATE-ACCEPT readout (BM-TAIL-03).
+  ps="$(lval projectStatus | awk '{print $1}')"
+  if [ "$ps" = "DONE" ]; then
+    ga="$BUILD/readouts/GATE-ACCEPT.md"; ga_signed=0
+    if [ -f "$ga" ]; then
+      ga_status="$(grep -m1 -E '^Status:' "$ga" 2>/dev/null | sed -E 's/<!--.*-->//g')"
+      if [ -n "$ga_status" ]; then
+        printf '%s' "$ga_status" | grep -qwE 'SIGNED|PASSED' && ga_signed=1
+      elif grep -qiE 'verdict:?[[:space:]]*\**PASSED|^PASSED' "$ga"; then
+        ga_signed=1
+      fi
+    fi
+    [ "$ga_signed" -eq 1 ] || warn tail "projectStatus is DONE but docs/build/readouts/GATE-ACCEPT.md is missing or not signed (BM-TAIL-03)"
+  fi
 fi
 
 # ── 8. REQ coverage (only when spec + pattern resolve) ───────────────────────
@@ -361,7 +506,7 @@ done
 # ── Report + JSON ────────────────────────────────────────────────────────────
 NV="$(wc -l < "$VIOL" | tr -d ' ')"; NW="$(wc -l < "$WARN" | tr -d ' ')"
 {
-  printf '{"repo":"%s","buildMemory":true,"violations":[' "$REPO"
+  printf '{"repo":"%s","buildMemory":true,"guards":%s,"violations":[' "$REPO" "$([ "$GUARDS" -eq 1 ] && echo true || echo false)"
   first=1
   while IFS="$(printf '\t')" read -r c m; do
     [ -n "$c" ] || continue
@@ -382,7 +527,7 @@ NV="$(wc -l < "$VIOL" | tr -d ' ')"; NW="$(wc -l < "$WARN" | tr -d ' ')"
   printf ']}\n'
 } > "$JSON"
 
-echo "check-build-memory: $REPO"
+echo "check-build-memory: $REPO$([ "$GUARDS" -eq 1 ] && echo ' (guards marker: on)')"
 if [ "$NV" -eq 0 ]; then
   echo "  ✓ no violations ($NW warning(s))"
 else

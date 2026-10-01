@@ -6,7 +6,7 @@
 -->
 # <Build> — <Product / systems> design specification
 
-- **Status:** Draft for operator review · <date>   <!-- flips to "canonical <date> — ratified by the operator (Q-* resolved)" at ratify -->
+- **Status:** Draft for operator review · <date -u +%F>   <!-- flips to "canonical <date -u +%F> — ratified by the operator (Q-* resolved)" at ratify -->
 - **v<prev> → v<this> delta, one paragraph:** <what changed since the prior version, and why — "initial" for round 1>
 - **Synthesized from:** the research/design notes under `docs/research/` and `docs/design/` (see Appendix C) and the founding brief `docs/brief.md`; binding inputs are the brief and the operator decisions register (`docs/research-ledger.md` §Q).
 - **Supersedes:** every design note on any point where they disagree.

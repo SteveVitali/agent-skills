@@ -38,7 +38,8 @@ propose the amendments that fold reality back into the spec, and apply only the 
 - [ ] every landed ticket's deliverables are tagged and dispositioned in `TICKET_VS_SPEC.md` *(deterministic)*
 - [ ] applied amendments are exactly the ticked ones, each with a manifest amendment line + ADR, through `spec_src/` when present *(deterministic)*
 - [ ] the ADR set equals the spec's ADR appendix (or the difference is a dispositioned row) *(deterministic)*
-- [ ] verification green; every new behaviour has a test that fails if it is removed; requirement ids stamped in the PR; anything not automatically verifiable is a `DEFERRALS.md` row with its compensating control; ADRs written for every deviation and owned decision; `BUILD_INDEX.md` row and `LEDGER.md` advanced. *(agentic — the universal phase-gate AC)*
+- [ ] *(live-read)* The artifact this row writes cites the live state it describes: the CI read of every open PR in the stack (`ci-boundary.sh` output once it ships — BM-CI-01; until then `gh pr checks <n>` with its `date -u`); where the build has a production surface, a probe-run record (id, `date -u`, result, sha256) no older than 24 h at the commit. A statement about production state with no such citation is removed, not written.
+- [ ] verification green; every new behaviour has a test that fails if it is removed; requirement ids stamped in the PR; anything not automatically verifiable is a `DEFERRALS.md` row with its compensating control; ADRs written for every deviation and owned decision; `BUILD_INDEX.md` row and `LEDGER.md` advanced; operating clauses met — dates from the clock, PR checks read and recorded, AC layers stated, no living-record pins, protected records only appended, gate words verbatim, harness in the run-ledger header. *(agentic — the universal phase-gate AC)*
 
 ## Requirement IDs to satisfy and stamp in the PR
 The spec-reconciliation ids of `{{spec_path}}` (matching `{{req_id_pattern}}`).
@@ -46,6 +47,9 @@ The spec-reconciliation ids of `{{spec_path}}` (matching `{{req_id_pattern}}`).
 ## Cross-cutting invariants
 - Cited from `docs/tickets/00_MANIFEST.md § Cross-cutting invariants`. Amend the source, never
   a generated spec artifact directly.
+
+## Operating clauses
+- Cited from `docs/tickets/00_MANIFEST.md § Operating rules`; the gap table has one row per clause.
 
 ## Notes
 - This ticket owns `TICKET_VS_SPEC.md` and `SPEC_RECONCILIATION_PLAN.md`.

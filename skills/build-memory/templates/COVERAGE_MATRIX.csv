@@ -1,5 +1,8 @@
-id,level,spec_section,class,verdict,evidence,owning_tickets,tests,adrs,routing,note
-# Template: docs/build/COVERAGE_MATRIX.csv (BM-TAIL-01). Written by the CAP.1 capstone ticket.
-# One row per spec requirement id. verdict ∈ MET | MET-DIFFERENTLY | PARTIAL | MISSING | AT-RISK-INTEGRATION.
+id,level,spec_section,class,verdict,evidence,owning_tickets,tests,adrs,routing,note,required_domain,achieved_domain,owed_legs,accepted_scope
+# Template: docs/build/COVERAGE_MATRIX.csv (BM-TAIL-01; BM-VERDICT-01). Written by the CAP.1 capstone ticket.
+# One row per spec requirement id. verdict ∈ MET | MET-DIFFERENTLY(ADR-nnn|RISK-id) | MET-ENGINEERED(D-id;…) | PARTIAL | MISSING | AT-RISK-INTEGRATION | WAIVED(ADR-nnn) | N/A-RATIONALE; parameters are ;-separated.
 # level ∈ MUST | SHOULD | MAY | RATIONALE. evidence = >=1 path:line / test id / ADR id (never blank for MET/MET-DIFFERENTLY).
-# routing = the ticket that will close a non-MET row (or "accepted"). Delete these comment lines when instantiating.
+# routing = the ticket that will close a non-MET row (or "accepted"). The last four columns are appended (never renamed):
+# required_domain / achieved_domain = BM-STATUS-01 layer words (+human); owed_legs = ;-separated OPEN/PARTIAL D-ids (MET-ENGINEERED);
+# accepted_scope = <readout>@<date -u +%F>#<clause> when a scoped acceptance covers the row (it never raises the verdict).
+# Delete these comment lines when instantiating.

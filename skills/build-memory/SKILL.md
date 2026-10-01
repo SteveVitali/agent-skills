@@ -65,9 +65,11 @@ no run line; markers referenced; DEFERRALS ids unique + valid statuses; no OPEN 
 PASSED gate; ADR files ↔ generated index; every ADR has `## Revisit trigger`; spec ADR
 appendix == file set when present; `LEDGER.md` key set + order and `nextTicket`; PHASE-LOG
 "done" ↔ `BUILD_INDEX` row + `runs/<ID>.md`; REQ→ticket coverage when the spec and
-`req_id_pattern` resolve; size + secret scans). The human summary lists each violation; the
-JSON at `/tmp/build-memory-check.json` mirrors it. **A failure is a real block** — the caller
-does not proceed past it.
+`req_id_pattern` resolve; size + secret scans; the ledger budget and shape, BM-LEDGER-08). The
+human summary lists each violation and warning; the JSON at `/tmp/build-memory-check.json`
+mirrors it. **A failure is a real block** — the caller does not proceed past it. *Guarded*
+rules warn unless `docs/build/README.md` also carries `<!-- build-memory-guards: 1 -->`
+(BM-COMPAT-06), so legacy content never fails on them.
 
 `decompose-spec` runs `check` after seeding, `implement-spec` before its close commit,
 `orchestrate-build` at every boundary.
@@ -90,6 +92,7 @@ target, if the file is absent, create it from the matching template in [`templat
    - `docs/build/logs/.gitignore` containing `*` then `!.gitignore` (the one ignored subtree).
    - `docs/tickets/{00_MANIFEST.md,_TEMPLATE.md,DEFERRALS.md}` (from `templates/MANIFEST.md`,
      `templates/ticket.md`, `templates/DEFERRALS.md`).
+   - `docs/build/readouts/_TEMPLATE.md` (from `templates/READOUT.md`).
    - `docs/adr/{_TEMPLATE.md}` (from `templates/adr-TEMPLATE.md`); then generate
      `docs/adr/README.md` with `adr-index` (below).
    - `AGENTS.md` "Build memory" section (from `templates/AGENTS-build-memory.md`) — appended
@@ -145,15 +148,17 @@ then remove the now-empty legacy dir and add `docs/build/logs/` to `.gitignore` 
   - **memory root & docs map:** `build-README.md`, `docs-README.md`, `AGENTS-build-memory.md`.
   - **machine state & index:** `LEDGER.md`, `BUILD_INDEX.md`.
   - **contracts & markers:** `MANIFEST.md`, `ticket.md`, `ticket-skeleton.md`, `HUMAN.md`,
-    `GATE.md`, `DEFERRALS.md`, `adr-TEMPLATE.md`.
+    `GATE.md`, `READOUT.md`, `DEFERRALS.md`, `adr-TEMPLATE.md`.
   - **upstream (synthesize-spec):** `research-ledger.md`, `research-CONVENTIONS.md`,
     `spec-front-matter.md`.
   - **closeout CSVs:** `COVERAGE_MATRIX.csv`, `BACKLOG.csv`.
-  - [`templates/tail/`](templates/tail/) — the nine tail tickets `decompose-spec` instantiates:
-    `CAP.1`, `CAP.2`, `CAP.3`, `GATE-ACCEPT`, `REC.1`, `REC.2`, `REC.3`, `DOC.1`, `DOC.2`.
-- [`tests/`](tests/) holds three fixture repos (`v2-clean`, `v2-violations`, `legacy-scratch`)
-  and `run-tests.sh`, which exercises all four scripts and asserts exit codes and expected
-  files. Run it from anywhere:
+  - [`templates/tail/`](templates/tail/) — the tail tickets `decompose-spec` instantiates:
+    `CAP.1`, `CAP.2`, `CAP.3`, `GATE-ACCEPT`, `REC.1`, `REC.2`, `REC.3`, `DOC.1`, `DOC.2`
+    (`tail=full`), and `DOC` (the default `tail=minimal`'s single docs row).
+- [`tests/`](tests/) holds five fixture repos (`v2-clean`, `v2-violations`, `legacy-scratch`,
+  `v2-legacy-ledger`, `v2-guards-violations`) and `run-tests.sh`, which exercises all four
+  scripts, asserts exit codes and expected files, and golden-checks the templates. Run it from
+  anywhere:
 
 // turbo
 ```bash
