@@ -1,7 +1,8 @@
 <!--
   Template: docs/tickets/DEFERRALS.md (BM-DEFER-01). Seeded by build-memory init; rows
   appended by implement-spec (and closed by later runs). Append-only companion — NOT a
-  chain ticket, never overwritten or deleted. The four rules below are stated verbatim.
+  chain ticket, never overwritten or deleted. The rules below are stated verbatim (rule 5
+  since build-memory 0.3.0; an existing file adopts it by appending it).
 -->
 # Deferred obligations ledger
 
@@ -12,15 +13,22 @@
 The rules:
 1. **Every run, first:** read this file. If the ticket you are about to implement — or a
    prerequisite it depends on — unblocks any `OPEN` row, **closing that row is part of your
-   run**: verify it for real, then flip it to `DONE` with the date and evidence.
+   run**: verify it for real, then flip it to `DONE` with the `date -u +%F` date and evidence.
 2. **Never delete a row.** Flip `OPEN` → `DONE` (verified) or `WONTFIX` (with a reason).
    History stays.
 3. **When you defer something new,** append a row here in the same run that defers it. A
    deferral that is not in this file did not happen.
 4. **Gates refuse to pass** while any `OPEN` row scoped to that phase remains. Treat an open
    row as gate-blocking.
+5. **Human work is scheduled, not deferred by default.** A `P` (human-prerequisite) row, or any
+   row whose `unblocked by` names a person, carries:
+   - `owner: <who>` and `trigger: <date -u +%F | ticket id>` in `unblocked by`;
+   - `withholds: <claim>` in `why deferred`.
+   The same obligation deferred a second time (an appended `DEFERRED-AGAIN <date -u +%F>` note)
+   stops the chain for the operator's explicit choice: keep with a plan (a new trigger), amend
+   the spec, or waive by ADR. (`H` is a handoff seam, not human work.)
 
-Status values: `OPEN` (owed) · `PARTIAL` · `DONE` (verified — add date + evidence) ·
+Status values: `OPEN` (owed) · `PARTIAL` · `DONE` (verified — add `date -u +%F` + evidence) ·
 `WONTFIX` (add reason) · `ACCEPTED-SKELETON` (intentionally minimal for now; revisit at the
 named ticket). Optional `kind`: V (verification) | F (functionality) | D (deviation) |
 H (handoff seam) | P (human prerequisite) | X (other).

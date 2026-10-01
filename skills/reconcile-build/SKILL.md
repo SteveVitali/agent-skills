@@ -41,7 +41,7 @@ follow the mode.
 |---|---|---|
 | `backlog` | [modes/backlog.md](modes/backlog.md) | `docs/build/BACKLOG.csv`, `BACKLOG.md`, `OPERATIONAL_READINESS.md` — every owed thing in exactly one row; readiness with a proof on every critical-path step. |
 | `spec` | [modes/spec.md](modes/spec.md) | `docs/build/TICKET_VS_SPEC.md`, `SPEC_RECONCILIATION_PLAN.md` — what the build did vs what the spec said, and the amendments to fold back. |
-| `integration` | [modes/integration.md](modes/integration.md) | `docs/build/INTEGRATION_PLAN.md`, a release-notes draft, and a `planning/<date>_decision-memo.md` seeding the next round. |
+| `integration` | [modes/integration.md](modes/integration.md) | `docs/build/INTEGRATION_PLAN.md` (the PR graph with its check states), a release-notes draft, and a `planning/<date -u +%F>_decision-memo.md` seeding the next round. |
 
 ## The one discipline that matters
 
@@ -55,13 +55,13 @@ zero times or more than once. That is the backlog's contract: complete and non-d
 
 | Script | Role |
 |---|---|
-| `scripts/check-backlog.sh` | verify the backlog is complete + non-duplicating; ids unique; statuses valid |
-| `scripts/merge-dryrun.sh` | report, per chain PR/branch, whether a clean merge is possible — **never merges** |
+| `scripts/check-backlog.sh` | verify the backlog is complete + non-duplicating with live homes; verdicts consistent with DEFERRALS (BM-VERDICT-01); the two sums vs CAP.3; ids unique; statuses valid |
+| `scripts/merge-dryrun.sh` | report, per chain PR/branch, whether a clean merge is possible and (`--ci`) its current check state — **never merges** |
 
 ## What this skill does NOT do
 
 - **No sequencing** — `orchestrate-build` runs the `REC.*` tickets; this skill is what they invoke.
-- **No merging, no CI, no release** — `merge-dryrun.sh` is read-only; the actual merge/release is the operator's,
-  from the copy-pasteable procedure `integration` writes.
+- **No merging, no CI *fixing*, no release** — CI state is read (read-only) and reported; `merge-dryrun.sh` is
+  read-only; the actual merge/release is the operator's, from the copy-pasteable procedure `integration` writes.
 - **No silent spec edits** — `spec` writes proposals; it applies an amendment only where the plan is ticked and
   `apply_amendments=true`, always through `spec_src` when it exists, with a manifest amendment line + an ADR.

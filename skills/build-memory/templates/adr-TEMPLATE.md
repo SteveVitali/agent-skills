@@ -8,7 +8,7 @@
 # ADR-NNN: <title>
 
 - **Status:** Proposed   <!-- Proposed | Accepted | Superseded by ADR-MMM -->
-- **Date:** <date>
+- **Date:** <date -u +%F>
 - **Ticket:** <ID>
 - **Requirement ids:** <ids>
 - **Spec:** <sections>

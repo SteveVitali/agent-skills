@@ -24,5 +24,6 @@ build ticket, read these first:
 Rules that hold across the build: contracts and history are **append-only** (amend by adding a
 dated note or a new ADR, never by rewriting a landed file); PRs **stack** (each ticket forks
 from the previous ticket's branch); a **gate is a pause, not a block**; **secrets never** enter
-any ledger (record `provided: yes/no`). Validate with
-`bash <skills>/build-memory/scripts/check-build-memory.sh .`.
+any ledger (record `provided: yes/no`); every date comes from `date -u`. Validate with
+`bash <skills>/build-memory/scripts/check-build-memory.sh .`, and before a closeout commit with
+`check-build-memory.sh . --staged` (history mode: protected records only gain lines, at their ends).

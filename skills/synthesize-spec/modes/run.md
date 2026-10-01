@@ -25,6 +25,14 @@ the next row. This is the upstream analogue of `orchestrate-build`'s "one ticket
 
 ## Close the row
 Flip the row to `done` with its evidence (the note path), append any new `§Q` questions and any `⚑` the operator
-must resolve, add a change-log line, advance `nextUnit` to the next open row (or, if none remain, to the first
-`§O` synthesis unit and set the hub to route to `synthesize`), bump `updatedAt`, and return to the hub. **Never
-mark a row done without a note that carries its evidence.**
+must resolve, and add a change-log line. Then update `CURRENT STATE`: `lastCompleted` = this row; `nextUnit` = the
+next open row (or, if none remain, the first `§O` synthesis unit, so the hub routes to `synthesize`) — never a done
+row; `updatedAt` and the change-log stamp from `date -u` **at the moment you write them** (BM-CLOCK-01) — never an
+estimated time (`HH:2x`), never the previous stamp plus a guess. Return to the hub. **Never mark a row done without
+a note that carries its evidence.**
+
+**One writer for `CURRENT STATE`.** When rows run in parallel (read-only fan-out, or several row workers), only the
+single orchestrating session touches `CURRENT STATE` and the change log, re-reading the ledger immediately before it
+writes; row workers write only their notes. Before acting on the ledger, and after closing a row, run
+`check-build-memory.sh --planning docs/research-ledger.md` (V14): a stale `updatedAt`, a `lastCompleted` that is not
+the newest done row, or a `nextUnit` that is already done is a finding to fix first.

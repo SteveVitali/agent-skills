@@ -11,7 +11,7 @@
 # <NN>_<slug> — <title>
 
 **Stream:** <ledger stream id, e.g. A>
-**Researched:** <ISO date>
+**Researched:** <date -u +%F>
 **Author:** <agent id>
 **Ledger rows covered:** <the ledger row ids this note answers>
 **Confidence overall:** high | medium | low
@@ -25,7 +25,7 @@
 **Claim:** <one sentence>
 **Status:** VERIFIED | PARTIALLY VERIFIED | UNVERIFIED | CONTRADICTED | INACCESSIBLE
 **Evidence:** <URL(s) actually fetched, with what they said>
-**Retrieved:** <ISO date>
+**Retrieved:** <date -u +%FT%TZ, at the fetch>
 **Implication for the spec:** <what the design must do about it>
 **Outline delta:** CONFIRMS | CORRECTS | EXTENDS | CONTRADICTS §<x> — <detail>
 ```

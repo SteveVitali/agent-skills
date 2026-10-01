@@ -22,7 +22,7 @@ spec is generated, else the spec file), anchor, before/after, and a tick box (`[
 For each **ticked** amendment: edit **through `spec_src/`** when the spec is generated (then run its `BUILD.sh`),
 else the spec file directly; append a `## Spec amendments applied` line to the manifest (date · section ·
 before/after · approver); and write an **ADR** for any design decision the amendment changes. Never edit an
-executed ticket contract — a later note (`> Amended <date>:`) points at the manifest line. With
+executed ticket contract — a later note (`> Amended <date -u +%F>:`) points at the manifest line. With
 `apply_amendments=false` (default), write the plan and stop — the operator ticks and re-runs.
 
 ## Close

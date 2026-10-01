@@ -104,8 +104,14 @@ is still the per-ticket worker, run once per ticket in a fresh context:
   accumulates context across the build and there is no long-lived agent
   context to rot.
   State lives in the ledger; the human pauses and intervenes at ticket
-  boundaries by editing it. Degrades to a subagent-per-ticket or a manual
-  fresh-session floor where a harness offers less; the
+  boundaries by editing it. At every boundary the PR checks are read
+  ([`ci-boundary.sh`](skills/orchestrate-build/scripts/ci-boundary.sh)), and
+  the loop refuses to dispatch past a red, pending or unreadable PR; the
+  history check proves protected records only gained lines, and an operator
+  digest ([`digest.sh`](skills/orchestrate-build/scripts/digest.sh)) reports
+  red PRs, outside merges, owed human work and spend at every pause. Degrades
+  to a subagent-per-ticket or a manual fresh-session floor
+  (`drive-build.sh --print-prompt`) where a harness offers less; the
   [rationale](skills/orchestrate-build/README.md) covers why it stays
   harness-agnostic.
 
@@ -188,6 +194,7 @@ authenticated [GitHub CLI](https://cli.github.com) (`gh`).
 ```
 .claude-plugin/                # plugin + marketplace manifests (Claude Code)
 CHANGELOG.md                   # notable changes, by plugin version
+tests/lint-skills.sh           # skill-text lint: retired phrases, required rules, rule ids resolve
 skills/<skill-name>/
 ├── SKILL.md             # entry point (Agent Skills format: frontmatter + steps)
 ├── README.md            # design rationale (where it exists)
@@ -195,7 +202,7 @@ skills/<skill-name>/
 ├── modes/               # mode-specific step files, loaded on demand (where applicable)
 ├── scripts/             # supporting shell helpers (bash 3.2+ compatible)
 ├── templates/           # artifact templates a skill instantiates (e.g. build-memory)
-├── tests/               # fixture repos + run-tests.sh self-test (e.g. build-memory)
+├── tests/               # fixture repos / stubs + run-tests.sh self-test (build-memory, orchestrate-build)
 ├── guidelines.md        # shared authoring guidelines (where a skill owns one)
 └── checklists/          # supporting checklists / shared reference docs (where applicable)
 ```

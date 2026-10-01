@@ -45,7 +45,10 @@ exit-code-gated and runnable in CI.
 ## What the modes are for
 
 - **`init`** adopts the layout in a repo, idempotently (never clobbers existing files).
-- **`check`** is the validator every other skill runs at its boundaries.
+- **`check`** is the validator every other skill runs at its boundaries. Its tree mode can only
+  warn about legacy content; its history mode (`--range` / `--staged` / `--first-parent`) judges
+  what a change adds or removes, so append-only and the clock are enforced per change without
+  ever failing a record for what it already held.
 - **`migrate`** moves a legacy gitignored scratch dir into the committed tree — move/rename
   only, contents byte-identical, dry-run by default — so an in-flight build (Eleutheria,
   Rhēma) can adopt v2 without rewriting history or renaming a single contract.

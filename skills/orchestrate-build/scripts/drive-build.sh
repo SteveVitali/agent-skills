@@ -13,6 +13,7 @@
 # Usage:
 #   drive-build.sh --ledger <path> [--skill <name>] [--yolo] [--agent-cmd "<cmd>"]
 #                  [--worktree <path>] [--log-dir <path>] [--max-iters <n>]
+#                  [--no-ci-gate] [--ci-interval <s>] [--ci-max-wait <s>] [--print-prompt]
 #
 #   --ledger      Path to the seeded build ledger (required).
 #   --skill       The driving skill each fresh unit follows (default: orchestrate-build). The
@@ -32,8 +33,21 @@
 #   --worktree    Directory to run each invocation in. Default: the ledger's buildWorktree.
 #   --log-dir     Where per-unit agent output is captured. Default: <ledger-dir>/drive-build-logs/.
 #   --max-iters   Safety cap on iterations (default 100). Re-run to continue past it.
+#   --ci-gate     (default with --skill orchestrate-build) Before every dispatch — and before reporting
+#                 DONE or a pause — read the CI of the last landed ticket's PR and its open ancestors
+#                 with ci-boundary.sh (BM-CI-01). Not green (fail / pending after the wait / unknown)
+#                 → exit 2, nothing dispatched. A repo that declares no CI reads `none-declared` and
+#                 passes. Other --skill ledgers (research rows, no PRs) default to off; --ci-gate
+#                 forces it on.
+#   --no-ci-gate  Explicit opt-out of that gate (printed in the log header). The prose rule still binds.
+#   --ci-interval / --ci-max-wait  Poll interval and bounded wait passed to ci-boundary.sh
+#                 (default 60 / 2700 seconds).
+#   --print-prompt  The manual tier (a harness with no headless CLI): run the same checks (status enum,
+#                 block, pause, CI gate), then print the fresh-session prompt for the next unit and exit
+#                 0 without dispatching. Paste it into a new session of any harness; re-run after the unit.
 #
-# Exit codes: 0 = DONE, cleanly paused, or gate-pending; 2 = BLOCKED / no-progress (human needed);
+# Exit codes: 0 = DONE, cleanly paused, gate-pending, or (--print-prompt) prompt printed;
+#             2 = BLOCKED / off-enum projectStatus / CI not green / no-progress (human needed);
 #             3 = iteration cap; 1 = usage.
 #
 # Compatible with bash 3.2+ (macOS default): C-style for-loops and indexed arrays only — no
@@ -42,6 +56,7 @@
 set -euo pipefail
 
 LEDGER="" ; AGENT_CMD="" ; MAX_ITERS=100 ; WORKTREE="" ; LOG_DIR="" ; YOLO=0 ; SKILL_NAME="orchestrate-build"
+CI_GATE=auto ; CI_INTERVAL=60 ; CI_MAX_WAIT=2700 ; PRINT_PROMPT=0
 
 usage() { grep -E '^#( |$)' "$0" | sed -E 's/^# ?//'; }
 
@@ -54,6 +69,11 @@ while [ $# -gt 0 ]; do
     --worktree)  WORKTREE="${2:-}"; shift 2 ;;
     --log-dir)   LOG_DIR="${2:-}"; shift 2 ;;
     --yolo)      YOLO=1; shift ;;
+    --ci-gate)   CI_GATE=1; shift ;;
+    --no-ci-gate) CI_GATE=0; shift ;;
+    --ci-interval) CI_INTERVAL="${2:-}"; shift 2 ;;
+    --ci-max-wait) CI_MAX_WAIT="${2:-}"; shift 2 ;;
+    --print-prompt) PRINT_PROMPT=1; shift ;;
     -h|--help)   usage; exit 0 ;;
     *) echo "drive-build.sh: unknown arg: $1 (try --help)" >&2; exit 1 ;;
   esac
@@ -80,7 +100,9 @@ status_val() {
 
 # Build the base agent argv (everything up to, but not including, the trailing prompt).
 BASE_ARGV=() ; AUTONOMY_NOTE=""
-if [ -n "$AGENT_CMD" ]; then
+if [ "$PRINT_PROMPT" -eq 1 ]; then
+  BASE_ARGV=(manual)                                  # no agent CLI: the operator starts the session
+elif [ -n "$AGENT_CMD" ]; then
   read -r -a BASE_ARGV <<< "$AGENT_CMD"
   [ "$YOLO" -eq 1 ] && echo "drive-build.sh: note: --yolo is ignored with --agent-cmd; bake autonomy into your command." >&2
 elif command -v claude >/dev/null 2>&1; then
@@ -102,7 +124,7 @@ else
   exit 1
 fi
 
-if [ "$YOLO" -ne 1 ] && [ -z "$AGENT_CMD" ]; then
+if [ "$PRINT_PROMPT" -ne 1 ] && [ "$YOLO" -ne 1 ] && [ -z "$AGENT_CMD" ]; then
   echo "drive-build.sh: WARNING — running WITHOUT --yolo. In headless mode these CLIs do not prompt; they" >&2
   echo "  silently DENY writes/commands, so tickets make no changes and the loop will stop at the no-progress" >&2
   echo "  guard. Enable unattended writes with --yolo (auto-maps to: ${AUTONOMY_NOTE}), or configure autonomy" >&2
@@ -121,44 +143,99 @@ if [ -z "$LOG_DIR" ]; then
 fi
 mkdir -p "$LOG_DIR"
 
-# Single-driver lock (atomic mkdir), auto-released on exit — two loops on one ledger would corrupt state.
-LOCK="${LEDGER}.drive-lock"
-if ! mkdir "$LOCK" 2>/dev/null; then
-  echo "drive-build.sh: another driver holds the lock ($LOCK). If it is stale, remove it and retry." >&2
-  exit 1
+if [ "$PRINT_PROMPT" -ne 1 ]; then
+  # Single-driver lock (atomic mkdir), auto-released on exit — two loops on one ledger would corrupt state.
+  LOCK="${LEDGER}.drive-lock"
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    echo "drive-build.sh: another driver holds the lock ($LOCK). If it is stale, remove it and retry." >&2
+    exit 1
+  fi
+  trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 fi
-trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 
-echo "drive-build: ledger=$LEDGER"
-echo "drive-build: agent=[${BASE_ARGV[*]}] yolo=$YOLO worktree=${WORKTREE:-<none>} logs=$LOG_DIR max-iters=$MAX_ITERS"
+if [ "$CI_GATE" = "auto" ]; then
+  if [ "$SKILL_NAME" = "orchestrate-build" ]; then CI_GATE=1; CI_NOTE="on"
+  else CI_GATE=0; CI_NOTE="off (--skill $SKILL_NAME has no PR boundaries; --ci-gate forces it)"; fi
+elif [ "$CI_GATE" -eq 1 ]; then CI_NOTE="on"
+else CI_NOTE="OFF (explicit opt-out --no-ci-gate)"; fi
+LEDGER_HARNESS="$(status_val harness)"
+echo "drive-build: ledger=$LEDGER harness(ledger)=${LEDGER_HARNESS:-<not recorded>}"
+echo "drive-build: agent=[${BASE_ARGV[*]}] yolo=$YOLO worktree=${WORKTREE:-<none>} logs=$LOG_DIR max-iters=$MAX_ITERS ci-gate=$CI_NOTE"
+
+# CI gate (BM-CI-01): the loop itself refuses to dispatch past a red, pending or unreadable PR.
+# Runs whenever lastCompleted names a ticket not yet verified in this run — so a restart re-reads it.
+VERIFIED=""
+ci_gate() {   # ci_gate <ticket id> → 0 green / none-declared / not applicable, else 1
+  local json="$LOG_DIR/ci-$1.json" wt=()
+  [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ] && wt=(--worktree "$WORKTREE")
+  if bash "$SCRIPT_DIR/ci-boundary.sh" --ledger "$LEDGER" --ticket "$1" --stack ${wt[@]+"${wt[@]}"} \
+       --interval "$CI_INTERVAL" --max-wait "$CI_MAX_WAIT" --json "$json"; then
+    return 0
+  fi
+  echo "drive-build: CI not green for $1 — next unit NOT dispatched ($json)." >&2
+  echo "  Record the blockedOn line above in the ledger (or let the next fresh unit record it); the fix is a ticket" >&2
+  echo "  (an insert or a return pass), or the operator's verbatim waiver in GATE DECISIONS. Never a relaxed test." >&2
+  return 1
+}
 
 for ((i = 1; i <= MAX_ITERS; i++)); do
-  STATUS="$(status_val projectStatus)" ; NEXT="$(status_val nextTicket)"
+  STATUS="$(status_val projectStatus | awk '{print $1}')" ; NEXT="$(status_val nextTicket)"
   [ -n "$NEXT" ] || NEXT="$(status_val nextUnit)"          # synthesize-spec ledgers use nextUnit
   PAUSED="$(status_val pauseRequested)" ; BLOCKED="$(status_val blockedOn)" ; PREV_RP="$(status_val returnPass)"
+  LAST="$(status_val lastCompleted | awk '{print $1}')"
 
   case "$STATUS" in
-    DONE)    echo "drive-build: projectStatus=DONE — build complete."; exit 0 ;;
+    NOT_STARTED|IN_PROGRESS|DONE|PAUSED) : ;;
     BLOCKED) echo "drive-build: projectStatus=BLOCKED (blockedOn: ${BLOCKED:-?}) — human needed."; exit 2 ;;
-    PAUSED)  echo "drive-build: projectStatus=PAUSED — gate pending / operator pause; answer in LEDGER.md and re-run."; exit 0 ;;
+    *) echo "drive-build: projectStatus='$STATUS' is not in the BM-LEDGER-02 enum (NOT_STARTED | IN_PROGRESS | BLOCKED | PAUSED | DONE) — human needed: correct the value in CURRENT STATE and re-run."; exit 2 ;;
   esac
-  [ "$PAUSED" = "true" ] && { echo "drive-build: pauseRequested=true — stopping at ticket boundary."; exit 0; }
   case "$BLOCKED" in
     ""|"(nothing)"|"nothing"|"none"|"(none)") : ;;
     *) echo "drive-build: blockedOn='$BLOCKED' — human needed."; exit 2 ;;
   esac
+  if [ "$CI_GATE" -eq 1 ] && [ -n "$LAST" ] && [ "$LAST" != "$VERIFIED" ]; then
+    case "$LAST" in
+      "(none)"|none|"(nothing)") : ;;
+      *) ci_gate "$LAST" || exit 2; VERIFIED="$LAST" ;;
+    esac
+  fi
+  case "$STATUS" in
+    DONE)    echo "drive-build: projectStatus=DONE — build complete."; exit 0 ;;
+    PAUSED)  echo "drive-build: projectStatus=PAUSED — gate pending / operator pause; answer in LEDGER.md and re-run."; exit 0 ;;
+  esac
+  [ "$PAUSED" = "true" ] && { echo "drive-build: pauseRequested=true — stopping at ticket boundary."; exit 0; }
   [ -n "$NEXT" ] || { echo "drive-build: cannot read nextTicket — is the ledger's CURRENT STATE intact?" >&2; exit 1; }
 
-  echo "── iter $i/$MAX_ITERS · unit: $NEXT ──────────────────────────────"
+  if [ "$PRINT_PROMPT" -eq 1 ]; then
+    TIER="manual"; CONTINUATION="the operator starts the next fresh session"
+  else
+    TIER="headless"; CONTINUATION="this external loop drives continuation"
+    echo "── iter $i/$MAX_ITERS · unit: $NEXT ──────────────────────────────"
+  fi
 
+  LEDGER_HARNESS="$(status_val harness)"
   PROMPT="You are a fresh session with no memory of prior sessions. Follow the $SKILL_NAME skill at \
 '$DRIVER_SKILL' (its sibling skills implement-spec, decompose-spec and build-memory are under '$SKILLS_ROOT'). \
 Operate on the ledger at '$LEDGER'. Execute EXACTLY ONE unit — the one named by the ledger's next-unit pointer \
 ('$NEXT') — per that skill's instructions (for orchestrate-build: if SETUP, run the SETUP checklist; if a ticket \
 id, run that single ticket end-to-end by invoking implement-spec against the ticket's contract). Then update the \
 ledger (advance CURRENT STATE, append a PHASE LOG entry) and STOP. Do NOT proceed to another unit and do NOT \
-launch drive-build.sh — this external loop drives continuation. Never fabricate green: on a REAL block set \
-blockedOn and stop; a pending gate is a RETURN PASS row, not a block."
+launch drive-build.sh — $CONTINUATION. Never fabricate green: on a REAL block set \
+blockedOn and stop; a pending gate is a RETURN PASS row, not a block. Every date you write comes from \
+\`date -u\` at that moment. Record your harness and model id as \`Harness: <harness>/<model-id>/$TIER\` in the \
+run-ledger header. The ledger's CURRENT STATE \`harness:\` reads '${LEDGER_HARNESS:-<not recorded>}': if it names \
+a different harness or model than yours, you are a harness switch (BM-HARNESS-01) — allowed only at this boundary \
+and only on the operator's words: record a PHASE LOG \`harness-switch\` entry quoting them, or stop and ask. \
+Before you stop on a block, a gate or a usage-limit event, or after the last row under a chain-table banner, \
+write the operator digest (orchestrate-build §4, scripts/digest.sh)."
+
+  if [ "$PRINT_PROMPT" -eq 1 ]; then
+    echo "drive-build: checks passed — start ONE fresh session (any harness) with this prompt, then re-run --print-prompt:"
+    echo "──8<──"
+    printf '%s\n' "$PROMPT"
+    echo "──8<──"
+    exit 0
+  fi
 
   ARGV=( "${BASE_ARGV[@]}" "$PROMPT" )
   LOG="$LOG_DIR/iter-$(printf '%03d' "$i")-${NEXT}.log"
@@ -173,7 +250,7 @@ blockedOn and stop; a pending gate is a RETURN PASS row, not a block."
   set -e
 
   # Progress = the ledger moved. If it didn't, diagnose (don't spin).
-  NEW_STATUS="$(status_val projectStatus)" ; NEW_NEXT="$(status_val nextTicket)" ; NEW_BLOCKED="$(status_val blockedOn)"
+  NEW_STATUS="$(status_val projectStatus | awk '{print $1}')" ; NEW_NEXT="$(status_val nextTicket)" ; NEW_BLOCKED="$(status_val blockedOn)"
   [ -n "$NEW_NEXT" ] || NEW_NEXT="$(status_val nextUnit)"
   NEW_RP="$(status_val returnPass)"
   if [ "$NEW_NEXT" = "$NEXT" ] && [ "$NEW_STATUS" = "$STATUS" ]; then

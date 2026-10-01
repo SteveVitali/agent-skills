@@ -206,7 +206,7 @@ done < "$PLAN"
 # Append the rename mapping into docs/build/README.md (append-only provenance).
 {
   printf '\n## Migration rename mapping\n\n'
-  printf 'Written by `build-memory migrate` on %s. Move/rename only; contents byte-identical.\n\n' "$(date +%Y-%m-%d)"
+  printf 'Written by `build-memory migrate` on %s. Move/rename only; contents byte-identical.\n\n' "$(date -u +%Y-%m-%d)"
   printf '| original path | new path |\n|---|---|\n'
   sort "$MAP"
 } >> "$TO/README.md"
