@@ -3,6 +3,86 @@
 All notable changes to agent-skills are recorded here. Versioning is the plugin version in
 `.claude-plugin/plugin.json`.
 
+## 0.4.0 — CI at every boundary, gate records, production rule, clock (Tier B-must: SK-01, SK-02, SK-03, SK-06, SK-09, SK-10)
+
+The second staged part of the SK-01…SK-25 proposals (Round-11 planning, B6): the skill text that, followed
+literally, reproduced an observed failure on every harness — "no CI polling", `auto` answering every gate item
+with "skip", the "(gitignored) ledger" with no production rule, and dates with no named source. A minor bump,
+not a patch, because three behaviours change. Scratch mode is unchanged; a committed repo without the guards
+marker sees no new failure (the one new validator check is guarded). Still pending, cited as *(forward: SK-nn)*:
+SK-04/05/07/08/11/12/15 (next), SK-16/21/23/24/25 (Round 11).
+
+### Behaviour changes
+- **`auto` no longer skips every gate item** (SK-03). In `auto`, a gate item is answered without a pause only
+  when a live `pre-authorization` row names its id (acting on that row's words); otherwise the loop pauses as in
+  `checkpoint`. Human, rights, counsel, publication and acceptance items always pause. An `auto` build that relied
+  on "skip all" now stops at those items.
+- **`drive-build.sh` reads CI before every dispatch** (SK-01, SK-02). With `--skill orchestrate-build` (the
+  default) it runs `ci-boundary.sh --stack` on the last landed ticket's PR before dispatching the next unit and
+  before reporting DONE or a pause; fail, pending after the bounded wait, or unreadable → exit 2 and nothing is
+  dispatched. A restart re-reads the same PR. `--no-ci-gate` opts out (printed in the log header); a repo with no
+  CI declared reads `none-declared` and passes; other `--skill` ledgers default to off.
+- **`drive-build.sh` enforces the `projectStatus` enum** (SK-02): a value outside NOT_STARTED | IN_PROGRESS |
+  BLOCKED | PAUSED | DONE (e.g. `IN-PROGRESS`) stops the loop with exit 2 before any dispatch. The first token of
+  the value is compared, so a trailing comment still works.
+- **`implement-spec` reads CI after its push** (SK-10) and records a `ci:` field; a red it caused is fixed in the
+  ticket, a red inherited from the base is reported **blocked** (PHASE LOG `blocked` entry + `blockedOn`, no
+  advance). "No CI polling" is gone from both skills; "no CI *fixing* outside the ticket" replaces it.
+
+### Added / changed, by proposal
+- **SK-01 — CI truth at every boundary.** New `orchestrate-build/scripts/ci-boundary.sh` (bash 3.2 + `gh`,
+  read-only): reads a PR's checks at its head and, with `--stack`, every still-open ancestor PR; bounded poll
+  (`--interval 60 --max-wait 2700`, `--no-wait`); resolves the PR from `--pr`, or from `--ledger`/`--ticket`
+  (BUILD_INDEX PR cell → PHASE LOG `done` entry → for `lastCompleted` only, the open PR at `chainTip`); required set from
+  `docs/build/tools/record_policy/ci_required.txt` when present; honours GATE DECISIONS `waiver` rows naming
+  `#<n>` and the check (per PR); delegates to a repo hook `docs/build/tools/ci_boundary.{py,sh}` with
+  `--pr <n> --json <path>` and passes its exit code through; exits 0 pass / none-declared · 3 fail ·
+  4 pending · 5 unknown; writes a `ci-boundary/1` JSON record and prints the `ci:` or `blockedOn:` line to
+  record. `orchestrate-build` §2.1 re-reads the previous PR before dispatch, §2.3 gains step 4 (CI truth) and
+  step 5 (external state), §0 clears `blockedOn: CI …` only on a pass read (a `repair` entry), §2.5 continues
+  only on pass/none-declared. `layout.md` gains the full BM-CI-01 text. The tail templates and
+  `decompose-spec mode=extend` now cite the script instead of "once it ships".
+- **SK-02 — `drive-build.sh`.** Status-enum guard; the CI gate above (`--ci-gate`/`--no-ci-gate`,
+  `--ci-interval`, `--ci-max-wait`); the prompt gains "Every date you write comes from `date -u` at that moment"
+  and "Record your harness and model id as `Harness: <harness>/<model-id>/<tier>` in the run-ledger header".
+  New `--print-prompt` (not in B6; added for harnesses with no headless CLI, e.g. a desktop agent driven by
+  hand): runs the same checks, then prints the fresh-session prompt for the next unit and exits without
+  dispatching, so the `manual` tier gets the mechanical CI gate too.
+- **SK-03 — gate-record hardening.** `orchestrate-build` §2.1 carries the five gate-record rules and the new
+  `auto` clause; GATE-G markers drafted by the orchestrator go in a labelled `agent-drafted` block; two new
+  guardrails. `layout.md` BM-GATE-01 is corrected and BM-GATE-05…09 get their full text (verbatim, tentative ≠
+  decision, no proxy signatures, agent-drafted text labelled and hash-confirmed, scoped pre-authorization).
+  Validator (guarded): in a 7-column GATE DECISIONS table, `kind` must be decision | pre-authorization |
+  confirmation | waiver | correction, and a `pre-authorization` row must carry `expires:` and `voided-by:`.
+  Legacy 6-column tables and bullet-style records are not judged.
+- **SK-06 — no out-of-ticket production changes.** `orchestrate-build` guardrail BM-PROD-01 (an in-chat "yes"
+  authorizes inserting a ticket, never a command); the non-goal now says it edits only "the build memory
+  (committed or scratch)". `implement-spec` §5.3 runs a production mutation only when the ticket's
+  `Production mutations:` header names it, through the named scripted path, after recording pre-state and
+  rollback. `layout.md` gains the full BM-PROD-01 text.
+- **SK-09 — the clock rule for the worker.** `implement-spec` §0.5; "bump `updatedAt`" → "set `updatedAt` from
+  `date -u`"; DEFERRALS flips carry the `date -u` date.
+- **SK-10 — one honest closeout.** `implement-spec` §6.5 step 0 reads CI; the BUILD_INDEX `PR` cell is the real
+  `#<n>`, never `PR pending`; the PHASE LOG `done` entry goes at the end of the file, ≤ 2 KiB, with `ci:`,
+  `layer:` and `harness:` fields; protected records only gain lines; the closeout commit also stages
+  `runs/<ID>.md`; §6.4 reports a `CI:` line. The run-ledger header carries `Harness:`, `Skills:`, `Started:` and
+  `Closed:` (BM-INDEX-02). *(forward: SK-16 — `--staged` history check.)*
+- **Tests.** New `orchestrate-build/tests/run-tests.sh` with a stub `gh` and a stub agent CLI: ci-boundary pass /
+  fail / cancel / pending-then-pass / pending-forever / no checks / unreadable / gh absent / none-declared /
+  required set (missing, skipped, non-required red) / stack inherited red / per-PR waiver / ledger resolution /
+  repo hook, plus a replay of B4's four recorded red heads (#141, #165, #179, #185 → 4 stops); drive-build green
+  to DONE, red stops after one dispatch, restart on red, pending past the wait, off-enum status, no CI declared,
+  gate pending, `--no-ci-gate`, `--print-prompt` (green and red), the prompt sentences, and a non-build skill.
+  build-memory gains the gate-record cases (guards fixture + ledger variants). New root `tests/lint-skills.sh`:
+  the retired phrases stay retired, the new rules are present, and every BM id the build skills cite resolves.
+  Every new assertion fails against 0.3.0.
+
+### Not in this release
+SK-04 (CURRENT STATE `harness:` + `harness-switch` entries; the run-ledger `Harness:` line is in), SK-05
+("reconcile it yourself" → `repair` entries), SK-07 (orient budget), SK-08 (layered progress line, operator
+digest), SK-11 (layered gap table), SK-12 (living-record pins), SK-15 (enum/exit 3/JSON identity in the
+validator), SK-16 (history mode), SK-21, SK-23, SK-24, SK-25.
+
 ## 0.3.0 — Build memory guards, Tier A (SK-13, SK-14, SK-17, SK-18, SK-19, SK-20, SK-22)
 
 The first staged part of the SK-01…SK-25 skill-change proposals (Round-11 planning, B6): the layout contract
