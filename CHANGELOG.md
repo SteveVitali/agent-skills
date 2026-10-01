@@ -3,6 +3,112 @@
 All notable changes to agent-skills are recorded here. Versioning is the plugin version in
 `.claude-plugin/plugin.json`.
 
+## 0.5.1 — Fixes found seeding SIG Round 11: report fields, history policy and `Closed:`, hook flags, V2 skip tokens
+
+A patch release: six fixes for upstream defects that SIG's Round-11 seed units recorded in their run ledgers
+(SEED-02a, SEED-02b, SEED-02c, SEED-15) while vendoring 0.5.0. **Backward-compatible:** no tree or history check
+becomes a failure. The one new non-zero exit is a report path that cannot be written. Each change either removes a
+false result or reports something truthfully that 0.5.0 got wrong. The behaviour notes below list every case where
+an output can differ.
+
+### Fixes
+1. **JSON report fields no longer shift** (SEED-02c, SIG's local patch `L3`). `check-build-memory.sh` read its
+   tab-separated diagnostic records with `IFS=<tab>`. Tab is IFS whitespace, so `read` merged adjacent
+   separators: any diagnostic with an empty `file`, `obligation` or `evidence` put its message under the wrong
+   key and left `message` empty. On SIG, all 45 warnings had an empty `message`. Records are now split on
+   `\037`. `check-history.sh`'s `diags()` had the same defect: the usually empty `commit` shifted `rule` and
+   `message`. So did `ci-boundary.sh`: an empty check description put the workflow name into the `blockedOn:`
+   line (`(web): CI (run 333)` instead of `(web): fail (run 333)`), and an empty link moved `waived` into
+   `link`. The human output was always right (awk `-F'\t'` does not merge separators).
+2. **An unwritable report path fails** (SIG's local patch `L2`). `check-build-memory.sh --json <unwritable>` now
+   exits 2 with `cannot write report to …`. Before, it printed the error and exited with the check's code, so
+   a caller saw an exit code with no report behind it. History mode exits 5 (unknown, never green) in the same
+   case, including `--replay`. Exit 2 already means "not applicable" there.
+3. **History-policy comments keep `#` inside a token** (SEED-02a). `check-history.sh` stripped every ` #…` as a
+   comment. That emptied `exempt docs/build/LEDGER.md ### RETURN PASS — current`, so the rule silently exempted
+   nothing (SIG had to write the heading without `###`). It also cut `allow … PR #7` down to `PR`, an
+   over-broad exemption. The documented rule is now: a comment is a line whose first non-blank character is
+   `#`, or a lone `#` after whitespace (followed by whitespace or the end of the line) plus the rest of that
+   line. A `#` inside a token is kept: `###`, `#123`, `^#+`. An `exempt` line's fields may also be separated
+   by tabs or several spaces.
+4. **A run ledger is closed only by a dated `Closed:` stamp in its header** (SEED-02a). The header is the lines
+   before its first `##` heading. Before, history mode treated `Closed` anywhere as a close, so the Round-10
+   shape `- **Closed:** none.` under `## Deferrals opened / closed` made the ledger append-only. An undated
+   placeholder now does not close a ledger either. The tree-mode warning "`PR pending` but runs/<ID>.md is
+   Closed:" uses the same `run_closed` rule.
+5. **`ci-boundary.sh` forwards the wait and the ledger to a repo hook** (SEED-02b). A hook
+   `docs/build/tools/ci_boundary.*` used to get only `--pr <n> --json <path>`. It therefore ignored
+   `--no-wait`: `digest.sh` and `merge-dryrun.sh --ci` could block for the hook's own 45-minute wait per PR.
+   It also ignored drive-build's `--ledger`, `--interval` and `--max-wait`. Now the caller's `--ledger`,
+   `--interval`, and `--max-wait` / `--no-wait` are forwarded when the caller gave them **and** the hook's
+   file names that flag (in its usage text or argument parser). `--no-wait` falls back to `--max-wait 0`,
+   and the reverse, when the hook names only one of them. A hook that names none still gets exactly
+   `--pr <n> --json <path>`. SIG's `ci_boundary.py` names all four. `--stack` is not forwarded: the hook owns
+   the stack.
+6. **V2 (`nextTicket` = the lowest chain row not landed) skips only on explicit gate-cell tokens** (SEED-15). The
+   skip words (superseded, deferred, unused, skipped, withdrawn, dropped) used to match anywhere in a row.
+   So a title like "the ADR-033-deferred parser layers" or a slug like `drop-unused-…` took a live row out of
+   the order. A row now leaves the order only by a token in its gate cell (the row's last cell, the manifest's
+   `gate` column): `superseded-by(<ids>)`, `superseded-by-split` (the skill's own split mark), `deferred(<D-id>)`
+   or `unused`. HUMAN rows are also skipped. This matches SIG's `audit_current_state.py`
+   (`ledger/next-not-lowest`) plus the split mark. **Legacy:** a bare word in the gate cell still skips, with
+   one `manifest` warning naming the rows and the token to write. When a mismatch names a row that has a skip
+   word only in its prose, the `nextTicket` warning says so.
+
+### Behaviour notes (what can differ from 0.5.0)
+- A chain row whose skip word appears only outside its gate cell is no longer skipped. On such a manifest the
+  V2 warning can now name that row (still a warning only).
+- In `history.policy`, a `#` glued to text (` #note`) is now kept as text. Inline comments need a lone `#`
+  (` # note`). Full-line `#` comments are unchanged.
+- A run ledger whose only `Closed:` is in a body section, or undated, is no longer judged append-only.
+- `check-build-memory.sh` exits 2 (history mode 5) when its report cannot be written.
+- `layout.md` (manifest, BM-CI-01, BM-HIST-01, the validator) and `orchestrate-build` §2.3/§2.4 state these
+  rules. The split mark `superseded-by-split` goes in the gate cell. The MANIFEST template carries the token
+  grammar as a comment under the chain table.
+
+### Tests
+29 new assertions, and every one fails against 0.5.0 (`8aeb6dc`, run from an export of that commit with the
+new tests copied in): build-memory tree mode 9, history mode 7, orchestrate-build 5, lint 8. The controls pass
+on both versions: a legacy hook keeps the bare contract, explicit tokens skip, a dated header stamp closes,
+and a generated region with no `exempt` rule is judged. The two existing 3fd7104 history cases now write
+`Closed:` in the run-ledger header, where `implement-spec` writes it, instead of at the end of the file.
+- `build-memory/tests/run-tests.sh` `test_051` covers:
+  - every report field sits under its own key, and no diagnostic has an empty `message`;
+  - `--json /dev/null/nope/r.json` exits 2;
+  - a body `Closed: none.` vs a dated header stamp;
+  - V2 with skip words in the scope cell, each explicit token, and a legacy bare gate-cell word (skip + warn).
+- `build-memory/tests/history/build.sh` covers:
+  - a body `Closed: none.` and an undated `Closed:` placeholder (neither closes);
+  - `exempt … ### RETURN PASS — current`, with and without a lone ` # ` comment, against the same region
+    with no `exempt`;
+  - an `allow` text that keeps `#7`;
+  - the report's `commit`/`rule`/`message` keys;
+  - an unwritable report (exit 5).
+- `orchestrate-build/tests/run-tests.sh` covers:
+  - a legacy hook still gets `--pr --json`, whatever the caller passed;
+  - a hook that names the flags gets `--ledger`/`--no-wait` and `--interval`/`--max-wait`, only when they
+    were given;
+  - a `--max-wait`-only hook gets `--no-wait` as `--max-wait 0`;
+  - an empty check description and an empty link.
+- `tests/lint-skills.sh`: the gate-cell token grammar, the split mark in the gate cell, the header `Closed:`
+  stamp, the policy comment rule, hook flag forwarding (layout and §2.3) and the unwritable-report exit are
+  present. "`superseded-by-split` in the chain table" stays retired.
+
+**SIG, read-only.** `check-build-memory.sh` on `/Users/stevenvitali/Eleutheria` at `a7951049` (clean, the same
+`input_digest` both times):
+- before: 2026-10-01T19:18:25Z (`date -u`), 0 violations, 45 warnings;
+- after: 2026-10-01T19:51:05Z, 0 violations, 45 warnings, with the human diagnostic lines byte-identical;
+- JSON diagnostics with an empty `message`: 45 → 0.
+
+History mode `--range HEAD~5..HEAD --no-hook` gives 0 / 0 on both versions.
+
+### Not in this release
+- SIG's local patch `L1` (the report's `dirty` flag also covers the canonical spec the input digest reads) was
+  not requested and is not ported.
+- SIG's own `memory_guard.py` and `history.policy` header still describe the old comment rule. They are
+  SIG-side and authoritative there, and their parsing is unaffected because SIG writes no inline comments.
+- The 0.5.0 deferrals (the cross-harness eval, CI for this repo on Linux) stand.
+
 ## 0.5.0 — History mode, a truthful validator, harness identity and the operator digest (SK-04, SK-05, SK-07, SK-08, SK-11, SK-12, SK-15, SK-16, SK-21, SK-23, SK-24, SK-25)
 
 The third and last staged part of the SK-01…SK-25 proposals (Round-11 planning, B6). With 0.3.0 (Tier A) and

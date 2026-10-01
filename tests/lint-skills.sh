@@ -67,6 +67,15 @@ present 'merge-dryrun.sh --ci' 'the PR graph reads CI (SK-24)' "$S/reconcile-bui
 present 'Revisit-trigger sweep' 'the REC sweeps (SK-23)' "$S/reconcile-build/modes/backlog.md"
 present 'agent-drafted, pending confirmation' 'agent-drafted answers pending confirmation (SK-25)' "$S/synthesize-spec/modes/ratify.md"
 present '--planning docs/research-ledger.md' 'the planning-ledger freshness check (SK-25)' "$S/synthesize-spec/modes/run.md"
+# 0.5.1 — rules found seeding SIG Round 11 (SEED-02a/02b/02c/15); each fails against 0.5.0's text.
+present 'A row leaves the `nextTicket` order only by a token in its **gate cell**' 'the V2 gate-cell skip tokens (0.5.1)' "$LAY"
+present '`superseded-by-split` in its manifest gate cell' 'the split mark in the gate cell (0.5.1)' "$OB"
+retired '`superseded-by-split` in the chain table' 'a split mark with no gate cell — 0.5.1' "$LAY"
+present 'once its header carries a dated `Closed:` stamp' 'a run ledger closes by its header stamp (0.5.1)' "$LAY"
+present 'a `#` inside a token is kept' 'the history.policy comment rule (0.5.1)' "$LAY"
+present 'a hook that names none gets exactly the two' 'the ci_boundary hook flag forwarding (0.5.1)' "$LAY"
+present 'forwarding `--ledger`, `--interval`, `--max-wait`/`--no-wait` when the hook names them' 'the hook flag forwarding at the boundary (0.5.1)' "$OB"
+present 'A report that cannot be written exits 2.' 'the unwritable-report exit (0.5.1)' "$LAY"
 for id in BM-CI-01 BM-GATE-05 BM-GATE-06 BM-GATE-07 BM-GATE-08 BM-GATE-09 BM-PROD-01 BM-HARNESS-01 BM-ORIENT-01 BM-TEST-01 BM-DIGEST-01 BM-HIST-01; do
   grep -qE "\(${id}\)|\(${id}," "$LAY" || fail "layout.md does not define $id"
 done
