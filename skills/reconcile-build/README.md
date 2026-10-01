@@ -34,8 +34,8 @@ outward-facing act that should not be automated behind the operator's back.
 
 ## Honest limitations
 
-- **Completeness is checkable only for id-bearing sources.** `check-backlog.sh` verifies deferrals, non-`MET`
-  coverage rows, and ADRs — each has a stable id. OPEN FINDINGS and free-text register rows have no ids, so their
+- **Completeness is checkable only for id-bearing sources.** `check-backlog.sh` verifies deferrals, the owed
+  coverage rows (gathered by verdict, BM-VERDICT-01), and ADRs — each has a stable id. OPEN FINDINGS and free-text register rows have no ids, so their
   inclusion is a reviewer check, flagged as a reminder rather than enforced.
 - **Spec reconciliation proposes; it does not decide.** `spec` mode writes the plan and applies an amendment only
   where the operator ticked it and `apply_amendments=true` — and always through `spec_src` with a manifest line

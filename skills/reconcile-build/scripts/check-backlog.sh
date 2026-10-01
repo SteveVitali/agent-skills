@@ -1,98 +1,207 @@
 #!/usr/bin/env bash
-# check-backlog.sh — verify a build's BACKLOG.csv is complete and non-duplicating. (BM-RECON-01.)
+# check-backlog.sh — verify a build's BACKLOG.csv is complete, non-duplicating and verdict-aware. (BM-RECON-01.)
 #
-# The backlog's contract: every owed thing lands in EXACTLY ONE row's `sources` cell. This script gathers the
-# owed-thing ids from the committed build memory and checks each appears exactly once in the backlog, that
-# bl_ids are unique, and that statuses are valid.
+# The backlog's contract: every owed thing lands in EXACTLY ONE row's `sources` cell, and that home is live
+# while the thing is owed. This script gathers the owed-thing ids from the committed build memory and checks
+# each appears exactly once, that its home row is not `closed` while the source is still owed, that bl_ids
+# are unique and statuses valid, and that the coverage matrix's verdicts are consistent with DEFERRALS
+# (BM-VERDICT-01). It prints the two sums and compares them with CAP.3's headline.
 #
 # Usage:
-#   check-backlog.sh [backlog_csv] [build_dir] [tickets_dir]
+#   check-backlog.sh [backlog_csv] [build_dir] [tickets_dir] [--json PATH]
 #
 # Arguments (all optional; sensible defaults relative to cwd):
 #   backlog_csv  — the backlog (default: docs/build/BACKLOG.csv)
 #   build_dir    — docs/build (default: docs/build)
 #   tickets_dir  — docs/tickets (default: docs/tickets)
+#   --json PATH  — the report (default: a unique mktemp file; the path is printed)
 #
-# Sources gathered (id-bearing):
-#   - DEFERRALS.md rows with status OPEN or PARTIAL          (ids D-<TICKET>-<n>)
-#   - COVERAGE_MATRIX.csv rows whose verdict is not MET       (the id column)
-#   - docs/adr/ADR-*.md                                       (ids ADR-NNN; each has a revisit trigger)
+# Sources gathered (id-bearing), by BM-VERDICT-01:
+#   - DEFERRALS.md rows whose status is OPEN or PARTIAL                 (ids D-<TICKET>-<n>)
+#   - COVERAGE_MATRIX.csv rows whose verdict is PARTIAL, MISSING or AT-RISK-INTEGRATION (the id column)
+#     · MET-ENGINEERED(D-…;…) is covered by its owed-leg D-rows (gathered above); each must be OPEN/PARTIAL,
+#       else the issue `stale-met-engineered`
+#     · WAIVED(ADR-nnn) is covered by that ADR's revisit-trigger row; a missing ADR is the issue `waiver-adr`
+#     · MET-DIFFERENTLY(ADR-…) is not gathered (its ADR is); MET and N/A-RATIONALE are not gathered
+#     · a MET row that cites an OPEN/PARTIAL D-row is the issue `met-with-owed-leg`
+#   - docs/adr/ADR-*.md                                                  (ids ADR-NNN; each has a revisit trigger)
 #   (OPEN FINDINGS and register rows have no stable ids; they are a reviewer check, reported as a reminder.)
+#   The matrix is read with a quote-aware CSV reader (a `"…"` cell may hold commas); verdict parameters are
+#   `;`-separated (a legacy `,` inside the parentheses is tolerated).
 #
 # Checks:
 #   - every gathered source id appears in exactly one BACKLOG.csv `sources` cell (0 = dropped; >1 = double-tracked)
-#   - bl_id column is unique
-#   - status column ∈ {open, closed, accepted}
+#   - home liveness: a still-owed source's row is not `closed` (`home-closed`)
+#   - bl_id column is unique; status column ∈ {open, closed, accepted}
+#   - the two sums (engineering closed = MET + MET-DIFFERENTLY + MET-ENGINEERED; requirement satisfied =
+#     MET + MET-DIFFERENTLY) recomputed from the matrix equal CAPSTONE_CLOSURE.md's headline when it states them
+#   - OPERATIONAL_READINESS.md carries no TBD
 #
-# Output: human summary to stdout; JSON to /tmp/backlog-check.json.
-# Exit codes: 0 — complete + non-duplicating · 1 — gaps found · 2 — no backlog file.
+# Output: human summary to stdout; JSON (backlog-check/2) to --json PATH or a unique temp file.
+# Exit codes: 0 — complete + consistent · 1 — issues found · 2 — no backlog file.
 # Read-only. Compatible with bash 3.2+ (macOS default). No associative arrays, no mapfile.
 
 set -o pipefail
 
-CSV="${1:-docs/build/BACKLOG.csv}"
-BUILD="${2:-docs/build}"
-TICKETS="${3:-docs/tickets}"
+JSON=""; POS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) JSON="${2:-}"; shift 2 ;;
+    -h|--help) awk 'NR > 1 && !/^#/ {exit} NR > 1 {sub(/^# ?/, ""); print}' "$0"; exit 0 ;;
+    *) POS+=("$1"); shift ;;
+  esac
+done
+CSV="${POS[0]:-docs/build/BACKLOG.csv}"
+BUILD="${POS[1]:-docs/build}"
+TICKETS="${POS[2]:-docs/tickets}"
 ADR_DIR="$(dirname "$BUILD")/adr"
-JSON="/tmp/backlog-check.json"
+[ -n "$JSON" ] || JSON="$(mktemp "${TMPDIR:-/tmp}/backlog-check.XXXXXXXX")" || exit 2
 
-[ -f "$CSV" ] || { echo "check-backlog: no backlog at $CSV"; printf '{"backlog":"%s","present":false}\n' "$CSV" > "$JSON"; exit 2; }
+[ -f "$CSV" ] || { echo "check-backlog: no backlog at $CSV"; printf '{"schema":"backlog-check/2","backlog":"%s","present":false}\n' "$CSV" > "$JSON"; echo "  JSON: $JSON"; exit 2; }
 
-ISSUES="$(mktemp)"; EXPECTED="$(mktemp)"; SOURCES="$(mktemp)"
-trap 'rm -f "$ISSUES" "$EXPECTED" "$SOURCES" 2>/dev/null' EXIT
+W="$(mktemp -d)"; trap 'rm -rf "$W" 2>/dev/null' EXIT
+ISSUES="$W/issues"; EXPECTED="$W/expected"; SOURCES="$W/sources"; : > "$ISSUES"; : > "$EXPECTED"; : > "$SOURCES"
+issue() { printf '%s\t%s\n' "$1" "$2" >> "$ISSUES"; }
 
-# ── Gather expected source ids ───────────────────────────────────────────────
-DEF="$TICKETS/DEFERRALS.md"
+# Quote-aware CSV → tab-separated (a cell's own tabs become spaces; doubled quotes unescaped).
+CSV_AWK='
+function csv(line, F,   n, i, c, q, cell) {
+  n = 0; cell = ""; q = 0
+  for (i = 1; i <= length(line); i++) {
+    c = substr(line, i, 1)
+    if (q) { if (c == "\"") { if (substr(line, i + 1, 1) == "\"") { cell = cell "\""; i++ } else q = 0 } else cell = cell c }
+    else if (c == "\"") q = 1
+    else if (c == ",") { F[++n] = cell; cell = "" }
+    else cell = cell c
+  }
+  F[++n] = cell; return n
+}
+function trim(x) { gsub(/^[ \t\r]+|[ \t\r]+$/, "", x); return x }
+'
+
+# ── DEFERRALS: every D-row's status (first canonical token in the last cell) ──
+DEF="$TICKETS/DEFERRALS.md"; : > "$W/dstat"
 if [ -f "$DEF" ]; then
-  grep -E '^\|[[:space:]]*D-' "$DEF" | while IFS= read -r row; do
-    status="$(printf '%s' "$row" | sed -E 's/[[:space:]]*\|[[:space:]]*$//' | awk -F'|' '{print $NF}' | tr 'a-z' 'A-Z' | tr -d ' ')"
-    case "$status" in
-      OPEN*|PARTIAL*) printf '%s\n' "$row" | sed -E 's/^\|[[:space:]]*//; s/[[:space:]]*\|.*$//' >> "$EXPECTED" ;;
-    esac
-  done
+  grep -E '^\|[[:space:]]*D-' "$DEF" | awk -F'|' '{
+      id = $2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", id)
+      last = ""; for (i = NF; i >= 1; i--) { c = $i; gsub(/[[:space:]]/, "", c); if (c != "") { last = $i; break } }
+      s = toupper(last); gsub(/[^A-Z-]+/, " ", s); n = split(s, T, " "); st = ""
+      for (i = 1; i <= n; i++) if (T[i] ~ /^(OPEN|PARTIAL|DONE|WONTFIX|ACCEPTED-SKELETON)$/) { st = T[i]; break }
+      print id "\t" st }' > "$W/dstat"
+  awk -F'\t' '$2 == "OPEN" || $2 == "PARTIAL" {print $1}' "$W/dstat" >> "$EXPECTED"
 fi
-MATRIX="$BUILD/COVERAGE_MATRIX.csv"
-if [ -f "$MATRIX" ]; then
-  # verdict is column 5 (id,level,spec_section,class,verdict,...)
-  awk -F',' 'NR>1 && $1 !~ /^#/ && $5 !~ /(^|[[:space:]])MET([[:space:]]|$)/ && $5 !~ /N\/A/ {gsub(/^[ \t]+|[ \t]+$/,"",$1); if($1!="") print $1}' "$MATRIX" >> "$EXPECTED"
-fi
+dstatus() { awk -F'\t' -v id="$1" '$1 == id {print $2; exit}' "$W/dstat"; }
+
+# ── ADRs (revisit triggers; a superseded ADR's trigger is no longer live) ──
+: > "$W/adrs"; : > "$W/adrs.live"
 if [ -d "$ADR_DIR" ]; then
-  ls "$ADR_DIR" 2>/dev/null | grep -oE '^ADR-[0-9]+' | sort -u >> "$EXPECTED"
+  for f in "$ADR_DIR"/ADR-*.md; do
+    [ -f "$f" ] || continue
+    id="$(basename "$f" | grep -oE '^ADR-[0-9]+')"; [ -n "$id" ] || continue
+    printf '%s\n' "$id" >> "$W/adrs"
+    grep -qiE '^[^#]*superseded by ADR-[0-9]+' "$f" || printf '%s\n' "$id" >> "$W/adrs.live"
+  done
+  sort -u "$W/adrs" -o "$W/adrs"; cat "$W/adrs" >> "$EXPECTED"
+fi
+
+# ── Coverage matrix: verdict-aware gather + consistency + the two sums ───────
+MATRIX="$BUILD/COVERAGE_MATRIX.csv"; SUM_E=""; SUM_R=""; NREQ=0
+if [ -f "$MATRIX" ]; then
+  LC_ALL=C awk "$CSV_AWK"'
+    NR == 1 { n = csv($0, H); for (i = 1; i <= n; i++) { h = tolower(trim(H[i])); if (h == "id") ic = i; if (h == "verdict") vc = i; if (h == "owed_legs") oc = i }
+              if (!ic) ic = 1; if (!vc) vc = 5; next }
+    /^#/ || /^[[:space:]]*$/ { next }
+    { n = csv($0, F); id = trim(F[ic]); v = trim(F[vc]); if (id == "") next
+      name = v; params = ""; if (index(v, "(")) { name = substr(v, 1, index(v, "(") - 1); params = substr(v, index(v, "(") + 1); sub(/\).*$/, "", params) }
+      name = toupper(trim(name)); gsub(/[ ;,]+/, ";", params)
+      legs = params; if (oc && trim(F[oc]) != "") { legs = trim(F[oc]); gsub(/[ ;,]+/, ";", legs) }
+      # every D-id the row cites anywhere (for the MET check)
+      row = $0; cited = ""; while (match(row, /D-[A-Za-z0-9.]+-[0-9]+/)) { cited = cited ";" substr(row, RSTART, RLENGTH); row = substr(row, RSTART + RLENGTH) }
+      # a field is never empty (bash `read` collapses consecutive tabs): "-" stands for none
+      print id "\t" (name == "" ? "-" : name) "\t" (params == "" ? "-" : params) "\t" (legs == "" ? "-" : legs) "\t" (cited == "" ? "-" : cited) }' "$MATRIX" > "$W/matrix"
+  while IFS="$(printf '\t')" read -r id name params legs cited; do
+    [ "$params" = "-" ] && params=""; [ "$legs" = "-" ] && legs=""; [ "$cited" = "-" ] && cited=""
+    case "$name" in
+      PARTIAL|MISSING|AT-RISK-INTEGRATION) printf '%s\n' "$id" >> "$EXPECTED" ;;
+      MET-ENGINEERED)
+        [ -n "$legs" ] || issue stale-met-engineered "$id is MET-ENGINEERED but names no owed-leg D-row (BM-VERDICT-01)"
+        for d in $(printf '%s' "$legs" | tr ';' ' '); do
+          case "$d" in D-*) : ;; *) continue ;; esac
+          st="$(dstatus "$d")"
+          case "$st" in OPEN|PARTIAL) : ;;
+            *) issue stale-met-engineered "$id is MET-ENGINEERED($d) but $d is ${st:-absent from DEFERRALS.md} — re-verdict (up to MET when every leg is DONE at its layer) (BM-VERDICT-01)" ;; esac
+        done ;;
+      WAIVED)
+        a="$(printf '%s' "$params" | grep -oE 'ADR-[0-9]+' | head -1)"
+        if [ -z "$a" ]; then issue waiver-adr "$id is WAIVED without an ADR id (BM-VERDICT-01)"
+        else grep -qxF "$a" "$W/adrs" || issue waiver-adr "$id is WAIVED($a) but $a does not exist (BM-VERDICT-01)"; fi ;;
+      MET)
+        for d in $(printf '%s' "$cited" | tr ';' ' '); do
+          st="$(dstatus "$d")"
+          case "$st" in OPEN|PARTIAL) issue met-with-owed-leg "$id is MET but cites $d, which is $st — MET-ENGINEERED($d) until the leg is done (BM-VERDICT-01)" ;; esac
+        done ;;
+      MET-DIFFERENTLY|N/A-RATIONALE) : ;;
+      *) issue verdict "$id has verdict '$name', outside BM-VERDICT-01" ;;
+    esac
+  done < "$W/matrix"
+  SUMS="$(awk -F'\t' '{ n++; v = $2
+      if (v == "MET") m++; else if (v == "MET-DIFFERENTLY") md++; else if (v == "MET-ENGINEERED") me++; else if (v == "N/A-RATIONALE") na++ }
+      END { print m + md + me "\t" m + md "\t" n - na }' "$W/matrix")"
+  SUM_E="$(printf '%s' "$SUMS" | cut -f1)"; SUM_R="$(printf '%s' "$SUMS" | cut -f2)"; NREQ="$(printf '%s' "$SUMS" | cut -f3)"
+  CLOS="$BUILD/CAPSTONE_CLOSURE.md"
+  if [ -f "$CLOS" ]; then
+    he="$(tr '\n' ' ' < "$CLOS" | grep -oiE 'engineering closed[^0-9]{0,40}[0-9]+' | head -1 | grep -oE '[0-9]+$')"
+    hr="$(tr '\n' ' ' < "$CLOS" | grep -oiE 'requirement satisfied[^0-9]{0,40}[0-9]+' | head -1 | grep -oE '[0-9]+$')"
+    [ -n "$he" ] && [ "$he" != "$SUM_E" ] && issue two-sums "CAPSTONE_CLOSURE.md says engineering closed = $he; the matrix gives $SUM_E (MET + MET-DIFFERENTLY + MET-ENGINEERED)"
+    [ -n "$hr" ] && [ "$hr" != "$SUM_R" ] && issue two-sums "CAPSTONE_CLOSURE.md says requirement satisfied = $hr; the matrix gives $SUM_R (MET + MET-DIFFERENTLY — MET-ENGINEERED is never counted as MET)"
+  fi
 fi
 sort -u "$EXPECTED" -o "$EXPECTED"
 
-# ── Extract the backlog's sources cells + bl_id/status columns ───────────────
+# ── The backlog: sources cells, bl_id, status ────────────────────────────────
 # CSV columns: bl_id, title, type, sources, req_ids, package, blocks, landing, gate, size, status
-BLIDS="$(mktemp)"; trap 'rm -f "$ISSUES" "$EXPECTED" "$SOURCES" "$BLIDS" 2>/dev/null' EXIT
-awk -F',' 'NR>1 && $1 !~ /^#/ {print}' "$CSV" | while IFS= read -r line; do
-  blid="$(printf '%s' "$line" | awk -F',' '{gsub(/^[ \t]+|[ \t]+$/,"",$1); print $1}')"
-  [ -n "$blid" ] || continue
-  printf '%s\n' "$blid" >> "$BLIDS"
-  src="$(printf '%s' "$line" | awk -F',' '{print $4}')"
-  status="$(printf '%s' "$line" | awk -F',' '{gsub(/^[ \t]+|[ \t]+$/,"",$NF); print $NF}' | tr 'A-Z' 'a-z')"
-  case " open closed accepted " in *" $status "*) : ;; *) printf 'status\t%s has invalid status "%s"\n' "$blid" "$status" >> "$ISSUES" ;; esac
-  # split the sources cell on space/semicolon/plus and record each id
-  printf '%s' "$src" | tr ' ;+' '\n\n\n' | sed -E 's/[^A-Za-z0-9._-]//g' | grep -E '.' >> "$SOURCES"
-done
+LC_ALL=C awk "$CSV_AWK"'
+  NR == 1 { n = csv($0, H); for (i = 1; i <= n; i++) { h = tolower(trim(H[i])); if (h == "bl_id") bc = i; if (h == "sources") sc = i; if (h == "status") tc = i }
+            if (!bc) bc = 1; if (!sc) sc = 4; next }
+  /^#/ || /^[[:space:]]*$/ { next }
+  { n = csv($0, F); b = trim(F[bc]); if (b == "") next; st = tolower(trim(tc ? F[tc] : F[n])); src = F[sc]; gsub(/\t/, " ", src)
+    print b "\t" (st == "" ? "-" : st) "\t" (src == "" ? "-" : src) }' "$CSV" > "$W/rows"
+cut -f1 "$W/rows" | sort | uniq -d | while IFS= read -r d; do [ -n "$d" ] && issue blid "duplicate bl_id \"$d\""; done
+while IFS="$(printf '\t')" read -r blid st src; do
+  case " open closed accepted " in *" $st "*) : ;; *) issue status "$blid has invalid status \"$st\"" ;; esac
+  # split the sources cell on space/semicolon/plus/comma and record each id with its row's status
+  printf '%s' "$src" | tr ' ;+,' '\n\n\n\n' | sed -E 's/[^A-Za-z0-9._-]//g' | grep -E '.' | while IFS= read -r s; do
+    printf '%s\t%s\t%s\n' "$s" "$blid" "$st"; done >> "$SOURCES"
+done < "$W/rows"
 
-# bl_id uniqueness
-if [ -s "$BLIDS" ]; then
-  sort "$BLIDS" | uniq -d | while IFS= read -r d; do [ -n "$d" ] && printf 'blid\tduplicate bl_id "%s"\n' "$d" >> "$ISSUES"; done
-fi
-
-# every expected id appears exactly once in the sources
+# every expected id appears exactly once; a still-owed source's home is not closed
 if [ -s "$EXPECTED" ]; then
   while IFS= read -r id; do
     [ -n "$id" ] || continue
-    n="$(grep -Fxc "$id" "$SOURCES" 2>/dev/null)" ; n="${n:-0}"   # grep -c prints 0 on no match (exit 1 ignored)
-    if [ "$n" -eq 0 ]; then printf 'missing\t%s is owed but appears in no backlog sources cell\n' "$id" >> "$ISSUES"
-    elif [ "$n" -gt 1 ]; then printf 'duplicate\t%s appears in %s backlog rows (must be exactly one)\n' "$id" "$n" >> "$ISSUES"; fi
+    n="$(awk -F'\t' -v id="$id" '$1 == id' "$SOURCES" | wc -l | tr -d ' ')"
+    if [ "$n" -eq 0 ]; then issue missing "$id is owed but appears in no backlog sources cell"
+    elif [ "$n" -gt 1 ]; then issue duplicate "$id appears in $n backlog rows (must be exactly one)"
+    else
+      home="$(awk -F'\t' -v id="$id" '$1 == id {print $2 "\t" $3; exit}' "$SOURCES")"
+      if [ "$(printf '%s' "$home" | cut -f2)" = "closed" ]; then
+        live=1
+        case "$id" in ADR-*) grep -qxF "$id" "$W/adrs.live" || live=0 ;; esac
+        [ "$live" -eq 1 ] && issue home-closed "$id is still owed but its home $(printf '%s' "$home" | cut -f1) is closed — reopen the row or close the source first"
+      fi
+    fi
   done < "$EXPECTED"
+fi
+
+# readiness: no TBD
+READY="$BUILD/OPERATIONAL_READINESS.md"
+if [ -f "$READY" ] && grep -qwE 'TBD' "$READY"; then
+  issue readiness "OPERATIONAL_READINESS.md carries TBD (line $(grep -nwE 'TBD' "$READY" | head -1 | cut -d: -f1)) — an unknown is a backlog row with a landing"
 fi
 
 NI="$(wc -l < "$ISSUES" | tr -d ' ')"; NE="$(wc -l < "$EXPECTED" | tr -d ' ')"
 {
-  printf '{"backlog":"%s","expectedSources":%s,"issues":[' "$CSV" "$NE"
+  printf '{"schema":"backlog-check/2","backlog":"%s","expectedSources":%s,' "$CSV" "$NE"
+  printf '"sums":{"requirements":%s,"engineeringClosed":%s,"requirementSatisfied":%s},"issues":[' "${NREQ:-0}" "${SUM_E:-null}" "${SUM_R:-null}"
   first=1
   while IFS="$(printf '\t')" read -r k m; do
     [ -n "$k" ] || continue; [ "$first" -eq 1 ] || printf ','; first=0
@@ -103,10 +212,13 @@ NI="$(wc -l < "$ISSUES" | tr -d ' ')"; NE="$(wc -l < "$EXPECTED" | tr -d ' ')"
 } > "$JSON"
 
 echo "check-backlog: $CSV (expected sources: $NE)"
+[ -n "$SUM_E" ] && echo "  sums: engineering closed $SUM_E / $NREQ · requirement satisfied $SUM_R / $NREQ (MET-ENGINEERED is never counted as MET)"
 if [ "$NI" -eq 0 ]; then
-  echo "  ✓ complete + non-duplicating"
+  echo "  ✓ complete + non-duplicating + verdict-consistent"
   echo "  ~ reminder: OPEN FINDINGS and spec-register deferred rows have no ids — confirm by eye."
+  echo "  JSON: $JSON"
   exit 0
 fi
 echo "  ✗ $NI issue(s):"; sed -E 's/\t/: /' "$ISSUES" | sed 's/^/    - /'
+echo "  JSON: $JSON"
 exit 1

@@ -4,13 +4,17 @@ Plan how the stacked-PR chain lands, draft the release notes, and seed the next 
 tail ticket. **Read-only about git** — this skill never merges.
 
 ## Write `docs/build/INTEGRATION_PLAN.md`
-- **The PR graph** — the chain from `BUILD_INDEX.md` (each PR, its base, its head), so the stack's shape is
-  explicit.
+- **The PR graph** — the chain from `BUILD_INDEX.md`: each PR, its base, its head and **its current check state**
+  (`scripts/merge-dryrun.sh --ci`, which reads each open PR once through `ci-boundary.sh --no-wait`: pass / fail
+  with the check and its first failing line / pending / none), with the `date -u` of the read. The graph shows the
+  stack's shape *and health*; without `gh` the state is recorded as `unknown`, never assumed green.
+- **External state** — `main`'s head, the PRs merged since the chain began (who, when), open PRs that are not
+  chain rows, and whether the chain still descends from `main` (read-only `gh` / `git`).
 - **A merge dry-run** — run `scripts/merge-dryrun.sh` (read-only; it reports per PR/branch whether a clean merge
   is possible and never mutates a branch). Record which pairs merge clean and which conflict.
 - **Strategy** — bottom-up vs squash vs rebase, given the dry-run results and the project's `mergePolicy`.
 - **A copy-pasteable operator procedure** — the exact commands the operator runs to land the chain (the skill
-  does not run them), with the order and the checks between steps.
+  does not run them), with the order and the checks between steps. A step that merges a red PR says so.
 - **Rollback** — how to back out each PR if a post-merge check fails.
 - **Post-merge verification** — the whole-build check to run once the chain is on the main branch.
 
@@ -19,7 +23,7 @@ From `BUILD_INDEX.md` (one landed row = one line), grouped for humans — featur
 known gaps (the `BACKLOG.csv` `accepted` rows). A draft the operator edits, not a published note.
 
 ## Seed the next round
-Write `docs/build/planning/<date>_decision-memo.md` — the skeleton the next `decompose-spec mode=extend` starts
+Write `docs/build/planning/<date -u +%F>_decision-memo.md` — the skeleton the next `decompose-spec mode=extend` starts
 from: what shipped, what the backlog carries forward, the open operator decisions, and the candidate scope for
 round N+1. This is the bridge from closeout back into planning.
 

@@ -25,7 +25,8 @@ From `skills/build-memory/templates/research-ledger.md`, with:
   `rounds` you intend.
 - **`## Q. Operator decisions register`** — a table `| id | question (abridged) | decision | unblocks / new rows |`,
   seeded with the open questions the brief leaves unresolved (decision cells empty until `ratify`).
-- **`## Change log`** — one dated line per round/edit.
+- **`## Change log`** — one line per round/edit, stamped `- <date -u +%FT%TZ> — …` from the clock at the moment of
+  writing (BM-CLOCK-01).
 - **A `CURRENT STATE` fenced block** so `drive-build.sh --skill synthesize-spec` can drive it:
 
 ```
@@ -38,7 +39,7 @@ returnPass:      (none)
 specOut:         docs/<build_name>-spec.md
 brief:           <path>
 round:           1
-updatedAt:       <date>
+updatedAt:       <date -u +%FT%TZ, at writing>
 ```
 
 If `outline_trace` is on, create `docs/OUTLINE_TRACE.md` seeded with the `OL-*` obligations (status `open`),

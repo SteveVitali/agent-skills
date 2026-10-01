@@ -58,6 +58,9 @@ Resolve the mode from the ledger, the way `orchestrate-build` orients:
 - An explicit `mode` input overrides.
 - `pauseRequested: true` or an unanswered operator-decision (`⚑`) row that blocks progress → report and stop
   (this is the human's decision surface, like a gate).
+- Freshness first (V14): `check-build-memory.sh --planning docs/research-ledger.md` — `updatedAt` not older than the
+  newest change-log stamp, `lastCompleted` the newest done row, `nextUnit` not done. Every stamp you write comes from
+  `date -u` at that moment (BM-CLOCK-01); only one session writes `CURRENT STATE`.
 
 Then follow the matching mode file below; each ends by updating the ledger's `CURRENT STATE` + change log and
 returning here.

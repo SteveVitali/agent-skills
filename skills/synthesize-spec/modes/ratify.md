@@ -10,12 +10,19 @@ and wait for the operator's answers** (this is a decision surface; `drive-build.
 exit 0, re-run after answers). If `operator_questions=false` the operator has pre-waived this; record that.
 
 ## 2. Record the answers
-Write each answer into the `§Q` register (`decision` + `unblocks / new rows`), verbatim. An answer that opens new
-work adds ledger rows (a second round) rather than being silently absorbed. Secrets are never recorded — a
-credential is `provided: yes/no`.
+Write each answer into the `§Q` register (`decision` + `unblocks / new rows`), **verbatim**, with the `date -u` of
+receipt and the channel (BM-GATE-05). An answer that opens new work adds ledger rows (a second round) rather than
+being silently absorbed. Secrets are never recorded — a credential is `provided: yes/no`.
+- **Agent-drafted answers.** When the operator delegates a question ("you decide", "draft it for me"), record the
+  drafted answer as `agent-drafted, pending confirmation` (e.g. `U-001`). It becomes a decision only when the
+  operator confirms that exact text — quote the confirmation ("I confirm U-001") with its `date -u` (BM-GATE-08).
+- **Tentative words are not a decision** (BM-GATE-06). Interrogative, conditional or hedged words ("maybe",
+  "I think … but", "should just") get the concrete decision restated with its consequences and a yes/no question;
+  record only the answer.
 
 ## 3. Flip and freeze
-- Flip the spec's `Status` to **canonical** (with the date and "ratified by the operator" + the Q ids resolved).
+- Flip the spec's `Status` to **canonical** (with the `date -u` date and "ratified by the operator" + the Q ids
+  resolved).
 - Freeze the research ledger: a final `## Change log` line ("ledger frozen at ratification, round N"); set
   `projectStatus: DONE`. The ledger is now historical.
 
