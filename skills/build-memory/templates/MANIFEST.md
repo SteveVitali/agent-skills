@@ -40,6 +40,7 @@ drives this from `docs/build/LEDGER.md`; a human can drive it by hand from this 
 | 1 | `01_<ID>__<slug>.md` | <phase> | ticket | <one line> | — |
 
 <!-- kind ∈ ticket | human | gate | skeleton | capstone | reconcile | docs; marker rows interleaved in order -->
+<!-- a row leaves the nextTicket order only by a gate-cell token: superseded-by(<ids>) · superseded-by-split · deferred(<D-id>) · unused (V2) -->
 
 ## Milestone gates
 <the gate thresholds, quoted verbatim from the spec; pre-registered, never guessed past, never pre-answered>

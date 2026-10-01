@@ -219,7 +219,12 @@ Phase-4 adversarial review record); `## Plan extensions` (append-only: inserts, 
   fresh-context review of the insert — never a contract drafted ad hoc at a boundary), with a
   filename suffix letter (`16a_…`) and a `## Plan extensions` line; an id never re-binds to
   another slug; splitting produces `<ID>a`, `<ID>b` files and marks the original
-  `superseded-by-split` in the chain table (the original file is kept). A file in
+  `superseded-by-split` in its gate cell (the original file is kept). A row leaves the
+  `nextTicket` order only by a token in its **gate cell** (the row's last cell):
+  `superseded-by(<ids>)`, `superseded-by-split`, `deferred(<D-id>)` or `unused`; HUMAN rows are
+  skipped too. A skip word anywhere else in the row (title, slug, scope) never takes it out of
+  the order (V2). A legacy bare word in the gate cell (`superseded`, `deferred`, `skipped`,
+  `withdrawn`, `dropped`) still skips, with a warning naming the token to write. A file in
   `docs/tickets/` that is neither a chain row nor a listed companion is a validator error
   (BM-MANIFEST-03).
 - A `companions:` line under the banners lists non-chain files kept in `docs/tickets/`
@@ -454,7 +459,9 @@ the stack — before the next unit is dispatched (`orchestrate-build` §2.1/§2.
 does it mechanically, `--print-prompt` for the `manual` tier).
 
 - The reader is `orchestrate-build/scripts/ci-boundary.sh`, or a repo hook
-  `docs/build/tools/ci_boundary.*` run with `--pr <n> --json <path>` that keeps the shared exit
+  `docs/build/tools/ci_boundary.*` run with `--pr <n> --json <path>` (plus the caller's
+  `--ledger`, `--interval`, `--max-wait` / `--no-wait` when given and the hook's file names that
+  flag — a hook that names none gets exactly the two) that keeps the shared exit
   codes: 0 pass / none-declared / not applicable · 3 fail, cancelled, or a required check
   missing or skipped · 4 pending after the bounded wait (default 45 min) · 5 unknown (never
   green). The required set is `docs/build/tools/record_policy/ci_required.txt` when present,
@@ -573,7 +580,7 @@ lines a change adds or removes**, so legacy records never fail for what they alr
 | LEDGER head (title, provenance, OPERATING MODE, CURRENT STATE) | living-archived: a CURRENT STATE value may change; other removed text is archived byte-for-byte under `reports/ledger-archive/` in the same change, with a pointer comment naming the file |
 | `DEFERRALS.md` rows | row-annotate: every old cell's text survives; a new leading status carries a date the row did not have |
 | `readouts/*` | append-only except the single `Status:` line (no in-place ticks, no deleted guard text) |
-| `runs/<ID>.md` once it carries `Closed:` | append-only (one honest closeout; a later fact is an appended dated note) |
+| `runs/<ID>.md` once its header carries a dated `Closed:` stamp (before its first `##` heading; `- **Closed:** none.` in a body section is not a close) | append-only (one honest closeout; a later fact is an appended dated note) |
 | `BUILD_INDEX.md` | append-only; an added row has the header's column count, a seq not used before and a real PR |
 | manifest `## Spec amendments applied`, `## Plan extensions`; chain table | append-only; a new chain row sits under a numbered `### Round <n>` banner (V13) and never re-binds an id to another slug |
 | executed contracts (the ticket has a BUILD_INDEX row at the base) | frozen; only an appended `> Amended <date -u +%F>:` note |
@@ -594,8 +601,11 @@ added line takes the committer time of the commit in the range that added it.
 - **Repo policy** — `docs/build/tools/record_policy/history.policy`, one rule per line:
   `append-only <glob>` (e.g. `db/sqitch.plan`), `date <glob> <ERE>` (an extra record position),
   `allow <glob> <expires ISO> <text>` (a future date allowed until it expires),
-  `exempt <path> <heading>` (a generated `##`/`###` region), `archive <dir>` (another
-  living-archived destination).
+  `exempt <path> <heading>` (a generated `##`/`###` region, e.g. `exempt docs/build/LEDGER.md
+  ### RETURN PASS — current`), `archive <dir>` (another living-archived destination). A comment
+  is a line whose first non-blank character is `#`, or a lone `#` after whitespace (followed by
+  whitespace or the line end) and the rest of the line; a `#` inside a token is kept (`###`,
+  `#123`, `^#+`).
 - **Repo hook** — if `docs/build/tools/memory_guard.{py,sh}` (or an executable `memory_guard`)
   exists, history mode runs it as `<hook> all --range … | --staged | --first-parent …
   [--json PATH] [--now ISO]` and passes its exit code through; the repo's own guard is
@@ -605,7 +615,8 @@ added line takes the committer time of the commit in the range that added it.
   (`base..head` on pull requests, `--first-parent` on pushes to the default branch); optionally
   a pre-commit hook.
 - **Exits** — 0 clean · 1 violations · 2 not applicable (scratch mode) · 5 unknown (a shallow
-  clone — "set fetch-depth: 0" —, an unresolvable range or bad arguments; never green).
+  clone — "set fetch-depth: 0" —, an unresolvable range, bad arguments or a report that cannot
+  be written; never green).
 
 ---
 
@@ -645,7 +656,8 @@ and `req_id_pattern` resolve, size + secrets.
   (BM-HARNESS-01), parseable ADR index cells (BM-ADR-02).
 - **Warnings only:** BUILD_INDEX row shape, unique seq, `PR pending` once Closed:, the
   live-verification vocabulary (BM-INDEX-01); record dates later than the clock (BM-CLOCK-01);
-  `nextTicket` not the lowest chain row still to land; two `repair — close:` entries in a round
+  `nextTicket` not the lowest chain row still to land (gate-cell tokens and HUMAN rows skipped;
+  a legacy bare gate-cell word warns); two `repair — close:` entries in a round
   with `blockedOn` empty; the orient recipe over 48 KiB; chain rows outside a numbered round
   banner; `living-pin?` test files (BM-TEST-01); an owed `P` deferral without `owner:`/`trigger:`;
   `projectStatus: DONE` without a signed `GATE-ACCEPT` readout; a seed ledger whose GATE
@@ -657,7 +669,8 @@ and `req_id_pattern` resolve, size + secrets.
 - **Report** — human summary to stdout; JSON `build-memory-check/2` to `--json PATH` or a unique
   `mktemp` file (the last stdout line names it): `input {repo, commit, dirty, input_digest}`,
   `summary {violations, warnings, exit}`, `counts {<check>: {candidates, evaluated}}`,
-  diagnostics `{check, severity, file, obligation, evidence, message}`.
+  diagnostics `{check, severity, file, obligation, evidence, message}` — every field under its
+  own key, empty or not. A report that cannot be written exits 2.
 - **Exit codes** (the shared build-script contract): 0 clean · 1 violations · 2 not a
   build-memory repo · 3 vacuous (done entries exist but fewer than half parse — never green).
 

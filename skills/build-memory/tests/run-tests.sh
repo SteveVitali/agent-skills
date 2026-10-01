@@ -351,6 +351,60 @@ test_truth() {
   [ "$ok" = 1 ] && say "PASS truth-checks"
 }
 
+# ── 0.5.1 — fixes from seeding SIG Round 11 (SEED-02a/02c/15); each assertion fails against 0.5.0 ──
+test_051() {
+  local ok=1 W L M out rc tok
+  # the JSON report keeps every field under its own key: an empty file/obligation/evidence never shifts the
+  # message (bash `read` merged adjacent tab separators — SIG L3); an unwritable --json path exits 2 (SIG L2)
+  W="$(tmp)/repo"; cp -R "$HERE/v2-violations" "$W"; gitify "$W"
+  bash "$SCRIPTS/check-build-memory.sh" "$W" --json "$W/r.json" >/dev/null 2>&1
+  grep -q '"message":""' "$W/r.json" && { fail "0.5.1 report: a diagnostic has an empty message (a field shifted)"; ok=0; }
+  for kw in '"file":"docs/tickets/00_MANIFEST.md","obligation":"","evidence":"","message":"4 chain row(s) are not under' \
+            '"obligation":"T9","evidence":"","message":"PHASE LOG marks T9 done' \
+            '"obligation":"","evidence":"T2","message":"ticket 01_T1__seed-schema.md depends on T2'; do
+    grep -qF -- "$kw" "$W/r.json" || { fail "0.5.1 report: a field is not under its own key ($kw)"; ok=0; }
+  done
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$HERE/v2-clean" --json /dev/null/nope/r.json 2>&1)"; rc=$?
+  { [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF "cannot write report to /dev/null/nope/r.json"; } \
+    || { fail "0.5.1 report: an unwritable --json path exit=$rc (want 2)"; ok=0; }
+  # a run ledger is Closed: only by a dated stamp in its header — `- **Closed:** none.` in a body section
+  # (deferrals closed) is not a close (SEED-02a)
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"
+  printf '| 02 | T2 | ticket | demo/t2 | PR pending | demo/t1 | 2026-09-09 | — | — | n-a | runs/T2.md |\n' >> "$W/docs/build/BUILD_INDEX.md"
+  printf '# T2 — run ledger\n\n- **Spec / Base / Branch / Config:** x\n\n## Deferrals opened / closed\n- **Opened:** none.\n- **Closed:** none.\n' > "$W/docs/build/runs/T2.md"
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"
+  printf '%s' "$out" | grep -qF "runs/T2.md is Closed:" && { fail "0.5.1 closed: a body 'Closed: none.' line was read as a closed run ledger"; ok=0; }
+  edit "$W/docs/build/runs/T2.md" '{print} /^- \*\*Spec/ {print "- **Closed:** 2026-09-09T12:00:00Z"}'
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"
+  printf '%s' "$out" | grep -qF "T2 still reads 'PR pending' but runs/T2.md is Closed:" || { fail "0.5.1 closed: a dated header Closed: stamp was not read"; ok=0; }
+  # V2: only an explicit gate-cell token takes a row out of the nextTicket order (SIG audit_current_state.py;
+  # SEED-15) — a skip word in the scope/title never does
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; L="$W/docs/build/LEDGER.md"; M="$W/docs/tickets/00_MANIFEST.md"
+  edit "$M" '{sub(/\| wire the consumers \| — \|/, "| wire the deferred parser layers; drop the unused shims | — |")} {print}'
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"
+  printf '%s' "$out" | grep -qF "is not the lowest chain row" && { fail "0.5.1 V2: a skip word in the scope cell took T2 out of the order"; ok=0; }
+  edit "$L" '{sub(/^nextTicket:[[:space:]]+T2/, "nextTicket:      DONE")} {print}'
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"
+  { printf '%s' "$out" | grep -qF "nextTicket 'DONE' is not the lowest chain row that has not landed ('T2'" \
+    && printf '%s' "$out" | grep -qF "row T2 says 'deferred' outside its gate cell"; } || { fail "0.5.1 V2: a prose-only skip word was honoured (or not explained)"; ok=0; }
+  for tok in 'superseded-by(T2a, T2b)' 'superseded-by-split' 'deferred(D-T2-1)' 'unused'; do
+    W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; L="$W/docs/build/LEDGER.md"; M="$W/docs/tickets/00_MANIFEST.md"
+    edit "$M" '{sub(/\| wire the consumers \| — \|/, "| wire the consumers | — · '"$tok"' |")} {print}'
+    edit "$L" '{sub(/^nextTicket:[[:space:]]+T2/, "nextTicket:      DONE")} {print}'
+    out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"
+    printf '%s' "$out" | grep -qE "is not the lowest chain row|bare word in the gate cell" && { fail "0.5.1 V2: the gate-cell token '$tok' did not skip T2 silently"; ok=0; }
+  done
+  # legacy: a bare word in the gate cell still skips, with a warning naming the token (old manifests keep working)
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; L="$W/docs/build/LEDGER.md"; M="$W/docs/tickets/00_MANIFEST.md"
+  edit "$M" '{sub(/\| wire the consumers \| — \|/, "| wire the consumers | superseded by T2a/T2b |")} {print}'
+  edit "$L" '{sub(/^nextTicket:[[:space:]]+T2/, "nextTicket:      DONE")} {print}'
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  { [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -qF "is not the lowest chain row" \
+    && printf '%s' "$out" | grep -qF "~ manifest: chain row(s) T2 ('superseded') are out of the nextTicket order only by a bare word in the gate cell"; } \
+    || { fail "0.5.1 V2: a legacy bare gate-cell word is not 'skip + warn' (exit=$rc)"; ok=0; }
+  [ "$ok" = 1 ] && say "PASS 0.5.1-fixes"
+}
+
 # ── SK-04/SK-17/SK-21 under the guards marker: new files must comply, older ones only warn ──
 test_new_files() {
   local ok=1 W out rc
@@ -519,6 +573,7 @@ test_templates
 test_seed_from_templates
 test_clock_tz
 test_truth
+test_051
 test_new_files
 test_planning
 test_history

@@ -6,7 +6,8 @@
 # contains, and a new violation fails the change that makes it:
 #   - append-only regions lose no line, and protected tables grow only at their end (append position);
 #   - DEFERRALS rows only grow (a status change appends a dated note); readouts change only their
-#     `Status:` line; a run ledger already `Closed:` only gains lines; executed contracts take only an appended `> Amended <date>:` note; landed ADRs
+#     `Status:` line; a run ledger already closed (a dated `Closed:` stamp in its header, before the
+#     first `##` heading) only gains lines; executed contracts take only an appended `> Amended <date>:` note; landed ADRs
 #     take only an appended `Superseded by ADR-NNN` line; `*.jsonl` keep their byte prefix;
 #   - the living LEDGER head is replaced only when the removed text is archived byte-for-byte in the
 #     same change (living-archived);
@@ -37,7 +38,10 @@
 # Repo hook: if docs/build/tools/memory_guard.py (python3), memory_guard.sh (bash) or an executable
 #   memory_guard exists, it runs instead as `<hook> all <the same mode args> [--json PATH] [--now ISO]`
 #   and its exit code is passed through (the repo's own guard is authoritative for the repo).
-# Repo policy: docs/build/tools/record_policy/history.policy, one rule per line (`#` comments):
+# Repo policy: docs/build/tools/record_policy/history.policy, one rule per line. Comments: a line whose
+#   first non-blank character is `#`, or a lone `#` after whitespace (followed by whitespace or the end
+#   of the line) and the rest of that line — `exempt <path> ### Heading  # why`. A `#` inside a token is
+#   kept: `###`/`##` heading marks, `#123`, `C#`, `^#+` in an ERE.
 #   append-only <path-glob>                       the whole file only appends at EOF (e.g. db/sqitch.plan)
 #   date <path-glob> <ERE>                        lines matching ERE carry a record date (first ISO date/time)
 #   allow <path-glob> <expires ISO> <fixed text>  a future date on a line containing the text is allowed
@@ -51,7 +55,7 @@
 #
 # Exit codes (the shared build-script contract): 0 clean · 1 violations · 2 not applicable (no
 #   build-memory marker: scratch mode) · 5 unknown — a shallow clone ("set fetch-depth: 0"), an
-#   unresolvable range or bad arguments; never treated as green.
+#   unresolvable range, bad arguments or a report that cannot be written; never treated as green.
 #
 # Bash 3.2+ and git; awk does the date arithmetic (no GNU date). No associative arrays in bash.
 
@@ -101,7 +105,8 @@ if [ "$MODE" = replay ]; then
   case "$ARG" in *..*) : ;; *) echo "check-history: --replay wants FROM..TO" >&2; exit 5 ;; esac
   [ -n "$JSON" ] || JSON="$(mktemp "${TMPDIR:-/tmp}/build-memory-replay.XXXXXXXX")"
   self="$0"; n=0; bad=0; out="$(mktemp)"; trap 'rm -f "$out"' EXIT
-  printf '{"schema":"build-memory-replay/1","range":"%s","commits":[' "$ARG" > "$JSON"
+  printf '{"schema":"build-memory-replay/1","range":"%s","commits":[' "$ARG" > "$JSON" \
+    || { echo "check-history: cannot write report to $JSON — unknown, never green" >&2; exit 5; }
   for c in $(G rev-list --reverse --first-parent "$ARG" 2>/dev/null); do
     n=$((n + 1))
     bash "$self" --repo "$REPO" --first-parent "$c" --no-hook ${NOW_ARG:+--now "$NOW_ARG"} --json "$out.j" > "$out" 2>&1; rc=$?
@@ -191,7 +196,8 @@ grep -qE '^[[:space:]]*<!-- build-memory-guards: 1 -->[[:space:]]*$' "$REPO/docs
 
 # ── Policy ──────────────────────────────────────────────────────────────────
 POL="$REPO/docs/build/tools/record_policy/history.policy"
-: > "$W/pol"; [ -f "$POL" ] && sed -E 's/[[:space:]]+#.*$//; s/^#.*$//; /^[[:space:]]*$/d' "$POL" > "$W/pol"
+# Comment rule (header): drop `#` lines; cut a lone ` # …` tail; keep a `#` inside a token (`### Heading`, `#123`).
+: > "$W/pol"; [ -f "$POL" ] && sed -E '/^[[:space:]]*#/d; s/[[:space:]]+#([[:space:]].*)?$//; s/[[:space:]]+$//; /^[[:space:]]*$/d' "$POL" > "$W/pol"
 pol() { awk -v k="$1" '$1 == k' "$W/pol"; }
 ARCHIVE_DIRS="docs/build/reports/ledger-archive $(pol archive | awk '{print $2}' | tr '\n' ' ')"
 POL_AO="$(pol append-only | awk '{print $2}')"
@@ -240,6 +246,14 @@ diffrecs() {
 }
 blank() { case "$1" in *[![:space:]]*) return 1 ;; esac; return 0; }
 norm() { sed -E 's/\\(.)/\1/g; s/[[:space:]]+/ /g; s/^ //; s/ $//'; }
+# run_closed < run ledger → 0 when its header (the lines before its first `##` heading) carries a dated `Closed:`
+# stamp (BM-INDEX-02). `- **Closed:** none.` in a body section, or an undated placeholder, is not a close.
+run_closed() {
+  # reads to EOF (no early exit): under pipefail an early exit could SIGPIPE `git show` and read as "open"
+  LC_ALL=C awk 'hdr_done { next } /^##+[[:space:]]/ { hdr_done = 1; next } { s = $0; gsub(/[*_`]/, "", s) }
+    s ~ /^[[:space:]]*(-[[:space:]]*)?Closed:[[:space:]]*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ { f = 1; hdr_done = 1 }
+    END { exit !f }'
+}
 
 # ── Region map of a markdown file: one line per region —  idx \t start \t end \t lastNonBlank \t level \t heading
 regions() {
@@ -304,7 +318,7 @@ while IFS="$(printf '\t')" read -r st path; do
       HEAD_END="$(awk '/^##[[:space:]]+OPEN FINDINGS/ {print NR - 1; exit}' "$W/base")"
       [ -n "$HEAD_END" ] || HEAD_END="$(awk '/^##[[:space:]]/ && !/^##[[:space:]]+CURRENT STATE/ {print NR - 1; exit}' "$W/base")"
       [ -n "$HEAD_END" ] || HEAD_END=0
-      pol exempt | awk -v p="$path" '$2 == p {sub(/^[^ ]+ [^ ]+ /, ""); print}' > "$W/exempt"
+      pol exempt | awk -v p="$path" '$2 == p && sub(/^[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+/, "") {print}' > "$W/exempt"
       # exempt spans at BASE (by heading text prefix)
       : > "$W/exspan"
       while IFS= read -r eh; do awk -F'\t' -v h="$eh" 'index($3, h) {print $1 "\t" $2}' "$W/sub.base" >> "$W/exspan"; done < "$W/exempt"
@@ -546,9 +560,9 @@ while IFS="$(printf '\t')" read -r st path; do
       done
       ;;
     runpr)
-      # a run ledger that was already Closed: at the base only gains lines (one honest closeout, BM-INDEX-02)
+      # a run ledger that was already closed at the base only gains lines (one honest closeout, BM-INDEX-02)
       case "$path" in docs/build/runs/*)
-        at_base "$path" | grep -qE '^[[:space:]]*(-[[:space:]]*)?(\*\*)?Closed:' && judge_append_only_file "$path" "$R" append-only ;;
+        at_base "$path" | run_closed && judge_append_only_file "$path" "$R" append-only ;;
       esac
       awk -F'\t' '$1 == "A" {print $2 "\t" $4}' "$R" | while IFS="$(printf '\t')" read -r hl txt; do
         printf '%s' "$txt" | grep -qE '^[[:space:]]*(-[[:space:]]*)?(\*\*)?(Date|Started|Closed|Landed|Recorded)(\*\*)?:' || continue
@@ -624,9 +638,9 @@ printf 'C\tappend-only\t%s\t%s\n' "$CAND_LINES" "$CAND_LINES" >> "$W/counts"
 esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 NV="$(awk -F'\t' '$1 == "V"' "$W/out" | wc -l | tr -d ' ')"; NW="$(awk -F'\t' '$1 == "W"' "$W/out" | wc -l | tr -d ' ')"
 EX=0; [ "$NV" -gt 0 ] && EX=1
-diags() {
+diags() {   # split on \037, never <tab>: `read` merges adjacent tabs, so an empty commit would shift rule/message
   local first=1
-  awk -F'\t' -v k="$1" '$1 == k' "$W/out" | while IFS="$(printf '\t')" read -r _k c f l sh r m; do
+  awk -F'\t' -v k="$1" '$1 == k' "$W/out" | tr '\t' '\037' | while IFS="$(printf '\037')" read -r _k c f l sh r m; do
     [ "$first" -eq 1 ] || printf ','; first=0
     printf '{"check":"%s","severity":"%s","file":"%s","line":%s,"commit":"%s","rule":"%s","message":"%s"}' \
       "$(esc "$c")" "$2" "$(esc "$f")" "${l:-0}" "$(esc "$sh")" "$(esc "$r")" "$(esc "$m")"
@@ -639,7 +653,7 @@ diags() {
   printf '"summary":{"violations":%s,"warnings":%s,"exit":%s},"counts":{' "$NV" "$NW" "$EX"
   awk -F'\t' 'BEGIN {f = 1} $1 == "C" { if (!f) printf ","; f = 0; printf "\"%s\":{\"candidates\":%s,\"evaluated\":%s}", $2, $3, $4 }' "$W/counts"
   printf '},"violations":['; diags V error; printf '],"warnings":['; diags W warning; printf ']}\n'
-} > "$JSON.tmp" && mv "$JSON.tmp" "$JSON"
+} > "$JSON.tmp" && mv "$JSON.tmp" "$JSON" || { rm -f "$JSON.tmp" 2>/dev/null; echo "check-history: cannot write report to $JSON — unknown, never green" >&2; exit 5; }
 
 echo "check-history: $MODE ${ARG:-} ($(printf '%.12s' "$BASE")..$( [ "$MODE" = staged ] && echo index || printf '%.12s' "$HEADC")) in $REPO"
 if [ "$NV" -eq 0 ]; then echo "  ✓ no violations ($NW warning(s); $NDATES record date(s), $CAND_LINES changed protected line(s) judged)"

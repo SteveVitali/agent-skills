@@ -60,13 +60,16 @@
 #     tables and bullet-style records are not judged.
 #   - warnings: projectStatus DONE without a signed readouts/GATE-ACCEPT.md; a seed ledger
 #     (PHASE LOG = the seed entry) whose GATE DECISIONS holds a non-pre-authorization row;
-#     nextTicket is not the lowest chain row not yet landed (deferred/superseded/unused rows and
-#     HUMAN rows skipped); two or more `repair — close:` entries in the current PHASE LOG region
+#     nextTicket is not the lowest chain row not yet landed (V2: a row leaves the order only by a
+#     gate-cell token superseded-by(…) / superseded-by-split / deferred(…) / unused, or as a HUMAN
+#     row; a legacy bare word in the gate cell still skips, with a warning); two or more
+#     `repair — close:` entries in the current PHASE LOG region
 #     while blockedOn is empty (BM-LEDGER-06); the orient recipe (BM-ORIENT-01) reads > 48 KiB;
 #     a record-position date later than the clock (BM-CLOCK-01; `future-ok` exempts); a chain row
 #     not under a numbered `### Round <n>` banner (history mode fails added ones)
 #   - BUILD_INDEX (warn; history mode fails added rows): every row has its header's column count;
-#     seq values unique; no `PR pending`/`TBD` in a row whose run ledger is Closed:; the live
+#     seq values unique; no `PR pending`/`TBD` in a row whose run ledger is Closed: (a dated
+#     `Closed:` stamp in its header, before the first `##` heading); the live
 #     verification value ∈ live-executed|staging|fixture-only|engineered|n-a|gate-pending (legacy `run`)
 #   - readouts (BM-INDEX-03): the guard sentence — fail for a readout created after the guards marker,
 #     else warn; run ledgers (BM-HARNESS-01): a `Harness:` line — fail for one created after the
@@ -89,7 +92,8 @@
 # Exit codes (the shared build-script contract):
 #   0 — clean (build-memory repo, no violations)
 #   1 — violations found
-#   2 — not a build-memory repo (no docs/build/README.md marker), or --planning file missing
+#   2 — not a build-memory repo (no docs/build/README.md marker), --planning file missing, or the
+#       JSON report cannot be written
 #   3 — vacuous: a check found candidates but could evaluate (almost) none of them — never green
 #   (history mode adds 5 — unknown: shallow clone / unresolvable range; see check-history.sh)
 #
@@ -149,6 +153,15 @@ _sha256_stream() {
   else openssl dgst -sha256 | awk '{print $NF}'; fi
 }
 _json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/ /g'; }
+# run_closed < runs/<ID>.md → 0 when the run ledger is closed: its header (the lines before its first `##`
+# heading) carries a dated `Closed:` stamp (BM-INDEX-02). A body line such as `- **Closed:** none.` under a
+# deferrals section, or an undated placeholder, is not a close. (check-history.sh uses the same rule.)
+run_closed() {
+  # reads to EOF (no early exit): under pipefail an early exit could SIGPIPE `git show` and read as "open"
+  LC_ALL=C awk 'hdr_done { next } /^##+[[:space:]]/ { hdr_done = 1; next } { s = $0; gsub(/[*_`]/, "", s) }
+    s ~ /^[[:space:]]*(-[[:space:]]*)?Closed:[[:space:]]*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ { f = 1; hdr_done = 1 }
+    END { exit !f }'
+}
 
 # ── The clock (BM-CLOCK-01) ──────────────────────────────────────────────────
 NOW_ISO="${NOW_ARG:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
@@ -207,13 +220,15 @@ write_report() {   # write_report <exit> <buildMemory true|false> [guards]
   } | sort -u > "$inset"
   digest="$( { [ -s "$inset" ] && _hash_list < "$inset"; } | _sha256_stream)"
   emit_diags() {
+    # Split on \037, never on <tab>: tab is IFS whitespace, so `read` would merge adjacent tabs and a
+    # diagnostic with an empty file/obligation/evidence field would put its message under the wrong key.
     local first=1 c f o e m
-    while IFS="$(printf '\t')" read -r c f o e m; do
+    while IFS="$(printf '\037')" read -r c f o e m; do
       [ -n "$c" ] || continue
       [ "$first" -eq 1 ] || printf ','; first=0
       printf '{"check":"%s","severity":"%s","file":"%s","obligation":"%s","evidence":"%s","message":"%s"}' \
         "$(_json_escape "$c")" "$2" "$(_json_escape "$f")" "$(_json_escape "$o")" "$(_json_escape "$e")" "$(_json_escape "$m")"
-    done < "$1"
+    done < <(tr '\t' '\037' < "$1")
   }
   {
     printf '{"schema":"build-memory-check/2","tool":"check-build-memory.sh",'
@@ -225,7 +240,8 @@ write_report() {   # write_report <exit> <buildMemory true|false> [guards]
     printf '"violations":['; emit_diags "$VIOL" error
     printf '],"warnings":['; emit_diags "$WARN" warning
     printf ']}\n'
-  } > "$JSON.tmp" && mv "$JSON.tmp" "$JSON" || { rm -f "$JSON.tmp"; echo "check-build-memory: cannot write report to $JSON" >&2; }
+  # A report that cannot be written exits 2 — never an exit code without its report.
+  } > "$JSON.tmp" && mv "$JSON.tmp" "$JSON" || { rm -f "$JSON.tmp" 2>/dev/null; echo "check-build-memory: cannot write report to $JSON" >&2; exit 2; }
 }
 human() {   # print the summary + the report path, then exit with $1
   local ex="$1" nv nw
@@ -753,25 +769,46 @@ if [ -f "$LEDGER" ]; then
     fi
   done
 
-  # nextTicket is the lowest chain row not landed and not deferred / superseded / unused (warn).
-  # HUMAN rows never block code tickets (BM-TICKET-05), so they are skipped.
+  # nextTicket is the lowest chain row not landed (V2; warn). A row leaves the order only by an explicit
+  # token in its gate cell (the row's last cell — the manifest's `gate` column): `superseded-by(<ids>)`,
+  # `superseded-by-split`, `deferred(<D-id>)` or the word `unused`; HUMAN rows never block code tickets
+  # (BM-TICKET-05). Skip words in the title, slug or scope ("the deferred parser layers", `drop-unused-…`)
+  # never take a row out of the order. Legacy: a bare word in the gate cell (superseded, deferred, skipped,
+  # withdrawn, dropped) still skips, with a warning naming the token to write instead.
   if [ -n "$nt" ] && [ "$nt" != "SETUP" ] && [ -s "$CHAIN_ROWS" ]; then
     LANDED="$(newtmp)"
     awk -F'\t' '$5 != "" && ($6 == 1 || $8 ~ /(^|[^A-Za-z-])(gate|PASSED|SIGNED|SKIPPED|skipped|split|superseded)([^A-Za-z-]|$)/) {print $5}' "$PL" >> "$LANDED"
     awk -F'\t' '$1 == "tk" {print $3}' "$BIX" >> "$LANDED"
     printf '%s\n' "$(lval returnPass)" | tr ',' '\n' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' >> "$LANDED"
-    want=""
-    while IFS="$(printf '\t')" read -r _ln _bn cf rowtxt; do
-      printf '%s' "$rowtxt" | grep -qiE 'superseded|deferred|unused|skipped|withdrawn|dropped' && continue
+    # <file> \t <skip: token | legacy:<word> | prose:<word> | -> per chain row, in table order
+    SKIPS="$(newtmp)"
+    LC_ALL=C awk -F'\t' '
+      function word(s,   w) { if (!match(s, /(^|[^a-z])(superseded|deferred|unused|skipped|withdrawn|dropped)([^a-z]|$)/)) return ""
+        w = substr(s, RSTART, RLENGTH); gsub(/[^a-z]/, "", w); return w }
+      { u = $4; gsub(/\\\|/, "", u); sub(/^[[:space:]]*\|/, "", u); sub(/\|[[:space:]]*$/, "", u); n = split(u, C, "|")
+        g = tolower(n ? C[n] : ""); r = tolower(u); k = "-"
+        if (g ~ /superseded-by\(|superseded-by-split|deferred\(/ || g ~ /(^|[^a-z])unused([^a-z]|$)/) k = "token"
+        else if (word(g) != "") k = "legacy:" word(g)
+        else if (word(r) != "") k = "prose:" word(r)
+        print $3 "\t" k }' "$CHAIN_ROWS" > "$SKIPS"
+    want="" ; want_k="" ; legacy=""
+    while IFS="$(printf '\t')" read -r cf sk; do
       rid="$(printf '%s' "$cf" | sed -E "s/^[0-9]{2,3}[a-z]?_(${ID_RE})__.*$/\1/")"
       [ "$rid" = "$cf" ] && rid="$(printf '%s' "$cf" | sed -E 's/__.*$//; s/^[0-9]*[a-z]?_?//; s/\.md$//')"
+      [ "$sk" = token ] && continue
       case "$rid" in HUMAN-H*) continue ;; esac
       grep -qxF "$rid" "$LANDED" && continue
-      want="$rid"; break
-    done < "$CHAIN_ROWS"
+      case "$sk" in legacy:*) legacy="$legacy${legacy:+, }$rid ('${sk#legacy:}')"; continue ;; esac
+      want="$rid"; want_k="$sk"; break
+    done < "$SKIPS"
     [ -n "$want" ] || want="DONE"
+    if [ -n "$legacy" ]; then
+      warn manifest "chain row(s) $legacy are out of the nextTicket order only by a bare word in the gate cell — write superseded-by(<ids>), superseded-by-split, deferred(<D-id>) or unused there (V2)" "$MANIFEST_REL"
+    fi
     if [ "$nt" != "$want" ]; then
-      warn ledger "LEDGER nextTicket '$nt' is not the lowest chain row that has not landed ('$want'; deferred/superseded/unused and HUMAN rows skipped)" "docs/build/LEDGER.md" "nextTicket" "$want"
+      hint=""
+      case "$want_k" in prose:*) hint=" — row $want says '${want_k#prose:}' outside its gate cell; only a gate-cell token takes a row out of the order" ;; esac
+      warn ledger "LEDGER nextTicket '$nt' is not the lowest chain row that has not landed ('$want'; superseded-by/deferred/unused gate-cell tokens and HUMAN rows skipped)$hint" "docs/build/LEDGER.md" "nextTicket" "$want"
     fi
   fi
 
@@ -968,7 +1005,7 @@ if [ -f "$BI" ]; then
   agg vocab "live-verification value(s) outside live-executed | staging | fixture-only | engineered | n-a | gate-pending (legacy: run) (BM-INDEX-01, BM-STATUS-01)"
   agg landed "landed date(s) later than the clock $NOW_DATE (BM-CLOCK-01)"
   awk -F'\t' '$1 == "pr" {print $2 "\t" $3}' "$BIX" | while IFS="$(printf '\t')" read -r ln tid; do
-    [ -f "$BUILD/runs/$tid.md" ] && grep -qE '^[[:space:]]*(-[[:space:]]*)?(\*\*)?Closed:' "$BUILD/runs/$tid.md" \
+    [ -f "$BUILD/runs/$tid.md" ] && run_closed < "$BUILD/runs/$tid.md" \
       && warn index "BUILD_INDEX.md line $ln: $tid still reads 'PR pending' but runs/$tid.md is Closed: — the PR cell is the real #<n> (BM-INDEX-01)" "docs/build/BUILD_INDEX.md" "$tid"
   done
 fi
