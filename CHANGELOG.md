@@ -3,6 +3,33 @@
 All notable changes to agent-skills are recorded here. Versioning is the plugin version in
 `.claude-plugin/plugin.json`.
 
+## 0.5.2 — build-memory `reqcov`: ids a spec states without writing them out; an opt-in literal requirement index
+
+A patch release for one defect and one opt-in check, found planning Episteme's Round 2 (OF-21; the proposal and its
+scratch-copy tests are Episteme's `docs/build/planning/2026-10-05_reqcov-skill-patch.md`). **Backward-compatible:** a
+repository without the new manifest line sees only fewer false warnings; no tree check becomes a failure.
+
+### Fixes
+1. **The spec's id set includes the ids a spec states without writing them out** (`spec_req_ids` replaces the literal
+   grep in section 8). Three forms are expanded: a range token (`REQ-X-1…20`, `REQ-X-1..20`, `REQ-X-1–20`,
+   `REQ-X-1…REQ-X-20`; capped at 500 ids), a continuation on the same line after a literal id
+   (`REQ-X-1 (…) · -2 (…) · -3`), and a numbered list under a line that names the family without a number and says
+   "requirements". The family pattern is derived from `req_id_pattern` alone; bash 3.2 / BWK-awk compatible. Before,
+   a ticket citing such an id drew a false `reqcov` warning (9 on Episteme's tree; 0 after, every other line of the
+   report identical).
+
+### New (opt-in)
+2. **`req_index_literal_from: <n>` in the manifest** makes every `## Requirement-ID → ticket index` row under
+   `### Round <k>` (k ≥ n) a `reqindex` **violation** unless it holds exactly one literal id that the spec states,
+   indexed once, to a chain ticket id or `deferred(<phase>)` (decompose-spec's one-owner rule). A Round-k ticket that
+   stamps an id not indexed to it is a warning. Rows of earlier rounds are not parsed, so a legacy family/range table
+   stays valid history.
+
+### Docs and tests
+- The script header and `layout.md` §5 describe both. New fixture `tests/v2-reqcov` (from `v2-clean`: a spec using
+  all four forms and a two-round manifest) and a `test_reqcov` case in `run-tests.sh` asserting a clean pass and five
+  seeded defects (a range row, an unknown id, an id indexed twice, a non-ticket owner; the unindexed stamp warning).
+
 ## 0.5.1 — Fixes found seeding SIG Round 11: report fields, history policy and `Closed:`, hook flags, V2 skip tokens
 
 A patch release: six fixes for upstream defects that SIG's Round-11 seed units recorded in their run ledgers

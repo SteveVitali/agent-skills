@@ -231,7 +231,15 @@ Phase-4 adversarial review record); `## Plan extensions` (append-only: inserts, 
   (default `DEFERRALS.md`, `_TEMPLATE.md`; a project may add audit/readout companions). The
   validator accepts exactly those (BM-MANIFEST-04).
 - An optional `req_id_pattern:` line gives the spec's requirement-id ERE, driving the REQ
-  coverage check.
+  coverage check. The spec's id set counts the ids a spec states without writing them out: a
+  range token (`REQ-X-1…20`), a continuation (`REQ-X-1 (…) · -2`) and a numbered list under a
+  line that names the family and says "requirements" (OF-21).
+- An optional `req_index_literal_from: <n>` line makes `## Requirement-ID → ticket index`
+  literal from round `<n>` on: under each `### Round <k>` sub-heading (k ≥ n) every row names
+  exactly one literal id (no range, family or "item n" form), the spec states it, no id is
+  indexed twice, and its owner is a chain ticket id or `deferred(<phase>)`; a ticket of that
+  round that stamps an id not indexed to it draws a warning. Earlier rounds' rows are not
+  parsed, so a legacy family/range table stays valid history.
 
 **Ticket (`docs/tickets/_TEMPLATE.md`, BM-TICKET-01)** — header bullets: `Sequence: <n> of <N>`
 (an inserted ticket uses its filename prefix, e.g. `16e of 50`) · `Phase` · `Kind` · `Tag`
