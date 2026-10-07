@@ -62,7 +62,10 @@ FILE_INDEX=$(mktemp)
 DIR_INDEX=$(mktemp)
 trap 'rm -f "$ISSUES_FILE" "$DOCS_FILE" "$FILE_INDEX" "$DIR_INDEX" 2>/dev/null' EXIT
 
-EXCLUDES='-not -path */node_modules/* -not -path */.git/* -not -path */target/* -not -path */build/* -not -path */dist/* -not -path */vendor/*'
+# `*/build/*` excludes build-output dirs but NOT `docs/build/` — the committed build-memory
+# root (this suite's own convention; check 1F below requires `docs/build/README.md`).
+# `*/.claude/*` excludes agent-harness dirs (e.g. `.claude/worktrees/` stale snapshots).
+EXCLUDES='-not -path */node_modules/* -not -path */.git/* -not -path */.claude/* -not -path */target/* -not -path */dist/* -not -path */vendor/* -not ( -path */build/* -and -not -path */docs/build/* )'
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pre-build file index for fast lookups (avoids repeated find calls)
@@ -142,7 +145,7 @@ classify_missing() {
 # Find agent docs
 # ─────────────────────────────────────────────────────────────────────────────
 
-find "$SCOPE_ABS" -name "AGENTS.md" -not -path "*/node_modules/*" -not -path "*/.git/*" >> "$DOCS_FILE" 2>/dev/null || true
+find "$SCOPE_ABS" -name "AGENTS.md" -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/.claude/*" >> "$DOCS_FILE" 2>/dev/null || true
 find "$SCOPE_ABS" -type d -name "agent_docs" -not -path "*/node_modules/*" 2>/dev/null | while read -r d; do
   find "$d" -name "*.md" >> "$DOCS_FILE" 2>/dev/null || true
 done
