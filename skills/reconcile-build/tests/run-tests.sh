@@ -93,6 +93,56 @@ test_check_backlog() {
   [ "$FAIL" -eq "$ok_before" ] && say "PASS check-backlog"
 }
 
+# 0.5.3 — BL-59 / BL-79 (found closing the fsq cost build): bold statuses, the leading status, an empty or
+# misdirected gather, quoted commas and CRLF. The empty/misdirected-gather assertions fail against 0.5.2;
+# the rest pin behaviour 0.5.0's rewrite already fixed (the fsq build ran a pre-0.5.0 checkout).
+test_check_backlog_053() {
+  local D E ok_before=$FAIL f
+  # bold statuses are gathered; a DONE row whose kept history says OPEN is not; a dropped bold row is missing
+  D="$(mktemp -d)"; mkbuild "$D"
+  cat >> "$D/docs/tickets/DEFERRALS.md" <<'EOF'
+| D-T1-5 | bold owed | time | T9 | read | none | **OPEN** — owner: operator |
+| D-T1-6 | bold partial | time | T9 | read | none | **PARTIAL (2026-09-20):** half done |
+| D-T1-7 | closed | time | T9 | read | none | **DONE** 2026-09-21 — was: OPEN (owed to T9) |
+EOF
+  printf 'BL-05,"bold rows, both",defect,"D-T1-5, D-T1-6",—,x,—,T9,—,S,open\n' >> "$D/docs/build/BACKLOG.csv"
+  cb "$D"
+  [ "$RC" -eq 0 ] || { fail "check-backlog 0.5.3: bold OPEN/PARTIAL rows with a quoted, comma-split sources cell: exit=$RC"; printf '%s\n' "$OUT" | sed 's/^/      /'; }
+  printf '%s' "$OUT" | grep -qF "D-T1-7" && fail "check-backlog 0.5.3: a DONE row whose history says OPEN was demanded"
+  sed -e 's/"D-T1-5, D-T1-6"/D-T1-6/' "$D/docs/build/BACKLOG.csv" > "$D/b.t" && mv "$D/b.t" "$D/docs/build/BACKLOG.csv"
+  cb "$D"
+  { [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qF "missing: D-T1-5 is owed but appears in no backlog sources cell"; } || fail "check-backlog 0.5.3: a dropped bold OPEN row was not reported (exit=$RC)"
+  # CRLF line endings in every input: same verdicts both ways
+  D="$(mktemp -d)"; mkbuild "$D"
+  for f in docs/build/BACKLOG.csv docs/build/COVERAGE_MATRIX.csv docs/tickets/DEFERRALS.md docs/build/CAPSTONE_CLOSURE.md; do
+    sed 's/$/'"$(printf '\r')"'/' "$D/$f" > "$D/c.t" && mv "$D/c.t" "$D/$f"; done
+  cb "$D"
+  { [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -qF "engineering closed 4 / 8 · requirement satisfied 2 / 8"; } || { fail "check-backlog 0.5.3: CRLF inputs: exit=$RC"; printf '%s\n' "$OUT" | sed 's/^/      /'; }
+  grep -v '^BL-02,' "$D/docs/build/BACKLOG.csv" > "$D/b.t" && mv "$D/b.t" "$D/docs/build/BACKLOG.csv"
+  cb "$D"
+  { [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qF "missing: D-T1-4 is owed"; } || fail "check-backlog 0.5.3: CRLF: a dropped source was not reported (exit=$RC)"
+  # BL-79: run from docs/build with only the backlog named, the defaults find the build (no false green from an empty gather)
+  D="$(mktemp -d)"; mkbuild "$D"
+  OUT="$(cd "$D/docs/build" && bash "$SCRIPTS/check-backlog.sh" BACKLOG.csv --json "$D/r.json" 2>&1)"; RC=$?
+  { [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -qF "(expected sources: 8)"; } || { fail "check-backlog 0.5.3: run from docs/build did not gather the build (exit=$RC)"; printf '%s\n' "$OUT" | sed 's/^/      /'; }
+  # a wrong build_dir is an input issue, not a pass
+  OUT="$(cd "$D" && bash "$SCRIPTS/check-backlog.sh" docs/build/BACKLOG.csv . docs/tickets --json "$D/r.json" 2>&1)"; RC=$?
+  { [ "$RC" -eq 1 ] && printf '%s' "$OUT" | grep -qF "inputs: build_dir . is not the backlog's directory docs/build"; } || { fail "check-backlog 0.5.3: a wrong build_dir passed (exit=$RC)"; printf '%s\n' "$OUT" | sed 's/^/      /'; }
+  # a directory given as the backlog exits 2 with a message
+  OUT="$(cd "$D" && bash "$SCRIPTS/check-backlog.sh" docs/build --json "$D/r.json" 2>&1)"; RC=$?
+  { [ "$RC" -eq 2 ] && printf '%s' "$OUT" | grep -qF "is a directory, not the backlog CSV"; } || fail "check-backlog 0.5.3: a directory as the backlog: exit=$RC"
+  # an empty gather is never green: exit 3 + the refusal; --allow-empty accepts a build that owes nothing
+  E="$(mktemp -d)"; mkdir -p "$E/docs/build" "$E/docs/tickets"
+  printf '| id | item | why deferred | unblocked by | how to verify | proxy now | status |\n|---|---|---|---|---|---|---|\n' > "$E/docs/tickets/DEFERRALS.md"
+  printf 'bl_id,title,type,sources,req_ids,package,blocks,landing,gate,size,status\n' > "$E/docs/build/BACKLOG.csv"
+  cb "$E"
+  { [ "$RC" -eq 3 ] && printf '%s' "$OUT" | grep -qF "0 expected sources — refusing to call this complete" && grep -qF '"vacuous":true' "$E/r.json"; } \
+    || { fail "check-backlog 0.5.3: an empty gather was called complete (exit=$RC)"; printf '%s\n' "$OUT" | sed 's/^/      /'; }
+  OUT="$(cd "$E" && bash "$SCRIPTS/check-backlog.sh" docs/build/BACKLOG.csv docs/build docs/tickets --allow-empty --json "$E/r.json" 2>&1)"; RC=$?
+  [ "$RC" -eq 0 ] || fail "check-backlog 0.5.3: --allow-empty on a build that owes nothing: exit=$RC"
+  [ "$FAIL" -eq "$ok_before" ] && say "PASS check-backlog-0.5.3"
+}
+
 test_merge_dryrun_ci() {
   local R BIN ok_before=$FAIL T; T="$(printf '\t')"
   R="$(mktemp -d)/repo"; mkdir -p "$R/.github/workflows"; printf 'on: [pull_request]\n' > "$R/.github/workflows/ci.yml"
@@ -121,6 +171,7 @@ test_merge_dryrun_ci() {
 
 say "reconcile-build self-test"
 test_check_backlog
+test_check_backlog_053
 test_merge_dryrun_ci
 if [ "$FAIL" -eq 0 ]; then say "ALL PASS"; exit 0; fi
 say "FAILURES above"; exit 1

@@ -193,6 +193,10 @@ add_p_table() { printf '\n| id | item | why deferred | unblocked by | how to ver
 new_case; add_p_table; commit_at "$W" 2026-09-28T03:00:00Z "owe"; expect 0 "unscheduled P row added without the guards marker (warning)" "~ deferrals [rule-5]"
 new_case; add_p_table; printf '<!-- build-memory-guards: 1 -->\n' >> "$W/docs/build/README.md"
 commit_at "$W" 2026-09-28T03:00:00Z "owe"; expect 1 "unscheduled P row added under the guards marker" "[rule-5]"
+# BL-61: the leading status decides — a DONE P row whose kept history says OPEN is not owed
+new_case; printf '\n| id | item | why deferred | unblocked by | how to verify | proxy now | kind | status |\n|---|---|---|---|---|---|---|---|\n| D-T2-9 | sign the contract | operator only | the operator | readout | none | P | DONE 2026-09-28 (signed) — was: OPEN |\n' >> "$W/docs/tickets/DEFERRALS.md"
+printf '<!-- build-memory-guards: 1 -->\n' >> "$W/docs/build/README.md"
+commit_at "$W" 2026-09-28T03:00:00Z "done"; expect 0 "a DONE P row whose history names OPEN (BL-61)"
 
 # ── BUILD_INDEX added rows ──────────────────────────────────────────────────
 new_case; printf '| 02 | T2 | ticket | demo/t2 | PR pending | demo/t1 | 2026-09-28 | — | — | n-a | runs/T2.md |\n' >> "$W/docs/build/BUILD_INDEX.md"

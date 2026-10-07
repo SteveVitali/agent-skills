@@ -36,7 +36,9 @@ outward-facing act that should not be automated behind the operator's back.
 
 - **Completeness is checkable only for id-bearing sources.** `check-backlog.sh` verifies deferrals, the owed
   coverage rows (gathered by verdict, BM-VERDICT-01), and ADRs — each has a stable id. OPEN FINDINGS and free-text register rows have no ids, so their
-  inclusion is a reviewer check, flagged as a reminder rather than enforced.
+  inclusion is a reviewer check, flagged as a reminder rather than enforced. An empty gather is never green:
+  0 expected ids exits 3 (usually a wrong `build_dir` / `tickets_dir`), unless `--allow-empty` says the build
+  owes nothing.
 - **Spec reconciliation proposes; it does not decide.** `spec` mode writes the plan and applies an amendment only
   where the operator ticked it and `apply_amendments=true` — and always through `spec_src` with a manifest line
   and an ADR. It will not silently rewrite a spec to match what got built.

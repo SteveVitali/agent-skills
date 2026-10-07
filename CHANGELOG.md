@@ -3,6 +3,54 @@
 All notable changes to agent-skills are recorded here. Versioning is the plugin version in
 `.claude-plugin/plugin.json`.
 
+## 0.5.3 — validator and backlog-check false results found closing the fsq cost build (BL-59, BL-60, BL-61, BL-79, T44)
+
+A patch release for defects the fsq-cost-system build recorded in its backlog while closing Round 3. That build ran
+a pre-0.5.0 checkout; each defect was re-checked against 0.5.2, and the tests below assert the 0.5.2 behaviour
+where it was already right (bold statuses, quoted commas, CRLF). **Backward-compatible for correct trees:** the
+changes remove false violations and warnings. The one new failure mode is `check-backlog.sh`'s refusal of an
+empty or misdirected gather (exit 3 / an `inputs` issue). Before, that case was a silent false green.
+
+### Fixes
+1. **OPEN × PASSED reads the row's owner, not any mention** (BL-60). `check-build-memory.sh` failed a tree when a
+   DEFERRALS row held the word "open" in any case and any cell, and the gate id anywhere in the row. A WONTFIX row
+   whose verify cell said "open a drawer" failed. So did a DONE row whose kept history named the gate, an OPEN
+   row re-owned to a ticket whose note cited `readouts/GATE-G3.md`, and an OPEN row owed to `GATE-G10` when
+   `GATE-G1` had passed. Builds respelled gate ids (`GATE G3`) to get past it. Now the rule needs the row's
+   leading status to be OPEN and the gate to be the row's **owner**. When the status cell names an owner
+   (`owed at|to|by`, `scoped to`, `due at|by`, `owner:`), the owner is the gate id right after those words.
+   That is how a row is re-owned, since cells only grow. Otherwise the owner is a gate id token in
+   `unblocked by`. Path forms are ignored. The violation names the rows. The old pipeline
+   (`grep … | grep -qF` under `pipefail`) could also miss a true positive on a large DEFERRALS file: `grep -q`
+   exits early and the upstream SIGPIPE failed the pipeline.
+2. **The leading status wins** (BL-61). The status parse took the first of OPEN, PARTIAL, DONE, … present anywhere
+   in the cell, so `DONE 2026-09-20 — was: OPEN` read as OPEN. That drew false rule-5 warnings in tree mode and
+   false rule-5 failures in history mode (`check-history.sh` had the same parse). One parse now serves the status
+   check, the kind-P check, the gate rule, history mode and `check-backlog.sh`. It takes the cell's first word
+   when it is canonical, else the earliest canonical status in capitals, else the earliest in any case.
+3. **`done` inside a branch name or path is not a ticket close** (T44). A PHASE LOG line naming
+   `x/feature/done`, `pr/done.md` or (before 0.5.0) `svitali/round3-t44-def1-text-done` was read as a close.
+   The validator then demanded a BUILD_INDEX row and a run file. `done` now counts only as a standalone word.
+4. **`check-backlog.sh` never calls an empty gather complete** (BL-79). With 0 expected ids it prints
+   "0 expected sources — refusing to call this complete" and exits **3** (`"vacuous":true` in the JSON).
+   `--allow-empty` accepts a build that owes nothing. `build_dir` now defaults to the backlog's own directory
+   and `tickets_dir` to `<build_dir>/../tickets`, so `check-backlog.sh BACKLOG.csv` run from `docs/build` finds
+   the build. The ADR directory is resolved absolutely. A `build_dir` other than the backlog's directory, when
+   that directory holds the build records, is an `inputs` issue, and so is a tickets directory without
+   `DEFERRALS.md`. A directory passed as the backlog exits 2 with a message saying so.
+5. **Bold statuses, quoted commas, CRLF** (BL-59, BL-79). These were already fixed by 0.5.0's rewrite (SK-23) and
+   are now pinned by tests. DEFERRALS lines are also stripped of `\r` before parsing.
+
+### Tests
+- `build-memory/tests/run-tests.sh` `test_053` covers the gate rule's false positives (lowercase "open", kept
+  history, a readout path, a re-owned row, `GATE-G10`). It also checks two true positives (owed by
+  `unblocked by`; owed at in the status cell), the leading status (DONE-with-OPEN-history P rows; an OPEN P row
+  still warns; an orphan still fails) and branch or path `done` (a real `T2 done` without an index row still
+  fails). `tests/history/build.sh` adds a DONE P row whose history says OPEN under the guards marker.
+- `reconcile-build/tests/run-tests.sh` `test_check_backlog_053` covers bold rows gathered, a dropped bold row
+  reported, CRLF in every input, the defaults from `docs/build`, a wrong `build_dir`, a directory as the
+  backlog, and an empty gather exiting 3 with `--allow-empty` accepting it.
+
 ## 0.5.2 — build-memory `reqcov`: ids a spec states without writing them out; an opt-in literal requirement index
 
 A patch release for one defect and one opt-in check, found planning Episteme's Round 2 (OF-21; the proposal and its

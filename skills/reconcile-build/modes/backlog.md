@@ -34,6 +34,10 @@ Then verify:
 ```bash
 bash scripts/check-backlog.sh docs/build/BACKLOG.csv docs/build docs/tickets   # exit 0 = complete, non-duplicating, live homes, verdict-consistent, sums = CAP.3
 ```
+Exit 1 = issues (including `inputs`: no `DEFERRALS.md` in the tickets directory, or a build directory other
+than the backlog's own); exit 2 = no backlog / a missing directory; **exit 3 = 0 expected ids gathered** — the
+script refuses to call an empty gather complete (it is almost always a wrong path). Pass `--allow-empty` only for
+a build that truly owes nothing. Never pipe the call (`| tail`) without `set -o pipefail`: a pipe hides the code.
 
 ## Write `docs/build/BACKLOG.md`
 The same rows grouped by `landing` (a human reads this to see "what's left before X"), with the themes called out.

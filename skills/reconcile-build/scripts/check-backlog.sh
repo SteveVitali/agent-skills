@@ -8,13 +8,16 @@
 # (BM-VERDICT-01). It prints the two sums and compares them with CAP.3's headline.
 #
 # Usage:
-#   check-backlog.sh [backlog_csv] [build_dir] [tickets_dir] [--json PATH]
+#   check-backlog.sh [backlog_csv] [build_dir] [tickets_dir] [--json PATH] [--allow-empty]
 #
-# Arguments (all optional; sensible defaults relative to cwd):
+# Arguments (all optional):
 #   backlog_csv  — the backlog (default: docs/build/BACKLOG.csv)
-#   build_dir    — docs/build (default: docs/build)
-#   tickets_dir  — docs/tickets (default: docs/tickets)
+#   build_dir    — docs/build (default: the backlog's own directory)
+#   tickets_dir  — docs/tickets (default: <build_dir>/../tickets)
 #   --json PATH  — the report (default: a unique mktemp file; the path is printed)
+#   --allow-empty — accept a gather of 0 expected ids as complete (a build that genuinely owes nothing)
+#   The ADR directory is <build_dir>/../adr, resolved to an absolute path (so build_dir `.` works from
+#   docs/build). Run from docs/build as `check-backlog.sh BACKLOG.csv`, the defaults find everything.
 #
 # Sources gathered (id-bearing), by BM-VERDICT-01:
 #   - DEFERRALS.md rows whose status is OPEN or PARTIAL                 (ids D-<TICKET>-<n>)
@@ -36,32 +39,59 @@
 #   - the two sums (engineering closed = MET + MET-DIFFERENTLY + MET-ENGINEERED; requirement satisfied =
 #     MET + MET-DIFFERENTLY) recomputed from the matrix equal CAPSTONE_CLOSURE.md's headline when it states them
 #   - OPERATIONAL_READINESS.md carries no TBD
+#   - inputs: tickets_dir holds DEFERRALS.md; a build_dir other than the backlog's own directory is an
+#     issue when the backlog's directory holds the build records (COVERAGE_MATRIX.csv or LEDGER.md) —
+#     the usual sign of a wrong build_dir (`inputs`)
 #
-# Output: human summary to stdout; JSON (backlog-check/2) to --json PATH or a unique temp file.
-# Exit codes: 0 — complete + consistent · 1 — issues found · 2 — no backlog file.
+# DEFERRALS statuses are read by the LEADING status of the row's last cell (markup such as `**OPEN**`
+# stripped): its first word when canonical, else the earliest canonical status in capitals, else the
+# earliest in any case — "DONE 2026-09-20 — was: OPEN" is DONE (the rule check-build-memory.sh uses).
+# CSV files are read quote-aware (a quoted cell may hold commas or doubled quotes); CRLF line endings
+# are tolerated in every input.
+#
+# An empty gather is never green (BL-79): when no expected id is gathered — the usual cause is a wrong
+# build_dir / tickets_dir, not a build that owes nothing — the script prints "0 expected sources —
+# refusing to call this complete" and exits 3. Pass --allow-empty when the build truly owes nothing.
+#
+# Output: human summary to stdout; JSON (backlog-check/2) to --json PATH or a unique temp file
+# (`"vacuous":true` on an empty gather).
+# Exit codes: 0 — complete + consistent · 1 — issues found · 2 — no backlog file (or a named directory
+# is missing) · 3 — vacuous: 0 expected ids gathered (never green; see --allow-empty).
 # Read-only. Compatible with bash 3.2+ (macOS default). No associative arrays, no mapfile.
 
 set -o pipefail
 
-JSON=""; POS=()
+JSON=""; POS=(); ALLOW_EMPTY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --json) JSON="${2:-}"; shift 2 ;;
+    --allow-empty) ALLOW_EMPTY=1; shift ;;
     -h|--help) awk 'NR > 1 && !/^#/ {exit} NR > 1 {sub(/^# ?/, ""); print}' "$0"; exit 0 ;;
     *) POS+=("$1"); shift ;;
   esac
 done
 CSV="${POS[0]:-docs/build/BACKLOG.csv}"
-BUILD="${POS[1]:-docs/build}"
-TICKETS="${POS[2]:-docs/tickets}"
-ADR_DIR="$(dirname "$BUILD")/adr"
+BUILD="${POS[1]:-$(dirname "$CSV")}"
+TICKETS="${POS[2]:-$BUILD/../tickets}"
 [ -n "$JSON" ] || JSON="$(mktemp "${TMPDIR:-/tmp}/backlog-check.XXXXXXXX")" || exit 2
 
-[ -f "$CSV" ] || { echo "check-backlog: no backlog at $CSV"; printf '{"schema":"backlog-check/2","backlog":"%s","present":false}\n' "$CSV" > "$JSON"; echo "  JSON: $JSON"; exit 2; }
+absent() { echo "check-backlog: $1"; printf '{"schema":"backlog-check/2","backlog":"%s","present":false}\n' "$CSV" > "$JSON"; echo "  JSON: $JSON"; exit 2; }
+[ -d "$CSV" ] && absent "$CSV is a directory, not the backlog CSV (pass docs/build/BACKLOG.csv)"
+[ -f "$CSV" ] || absent "no backlog at $CSV"
+[ -d "$BUILD" ] || absent "no build directory at $BUILD"
+[ -d "$TICKETS" ] || absent "no tickets directory at $TICKETS"
+BUILD_ABS="$(cd "$BUILD" && pwd)"; CSV_DIR_ABS="$(cd "$(dirname "$CSV")" && pwd)"
+ADR_DIR="$(dirname "$BUILD_ABS")/adr"
 
 W="$(mktemp -d)"; trap 'rm -rf "$W" 2>/dev/null' EXIT
 ISSUES="$W/issues"; EXPECTED="$W/expected"; SOURCES="$W/sources"; : > "$ISSUES"; : > "$EXPECTED"; : > "$SOURCES"
 issue() { printf '%s\t%s\n' "$1" "$2" >> "$ISSUES"; }
+
+# inputs: the directories must be the ones the backlog belongs to (BL-79)
+[ -f "$TICKETS/DEFERRALS.md" ] || issue inputs "no DEFERRALS.md in tickets_dir $TICKETS — wrong tickets_dir? (no deferral was gathered)"
+if [ "$BUILD_ABS" != "$CSV_DIR_ABS" ] && { [ -f "$CSV_DIR_ABS/COVERAGE_MATRIX.csv" ] || [ -f "$CSV_DIR_ABS/LEDGER.md" ]; }; then
+  issue inputs "build_dir $BUILD is not the backlog's directory $(dirname "$CSV"), which holds the build records — wrong build_dir? (pass $(dirname "$CSV"))"
+fi
 
 # Quote-aware CSV → tab-separated (a cell's own tabs become spaces; doubled quotes unescaped).
 CSV_AWK='
@@ -79,15 +109,22 @@ function csv(line, F,   n, i, c, q, cell) {
 function trim(x) { gsub(/^[ \t\r]+|[ \t\r]+$/, "", x); return x }
 '
 
-# ── DEFERRALS: every D-row's status (first canonical token in the last cell) ──
+# ── DEFERRALS: every D-row's status (the leading status of the last cell; markup stripped) ──
 DEF="$TICKETS/DEFERRALS.md"; : > "$W/dstat"
+DEF_STATUS_AWK='
+function defstat(c,   s, n, i, R, u, C) {
+  C = "^(OPEN|PARTIAL|DONE|WONTFIX|ACCEPTED-SKELETON)$"
+  s = c; gsub(/[*_`]/, "", s); n = split(s, R, /[^A-Za-z-]+/)
+  for (i = 1; i <= n; i++) if (R[i] ~ /[A-Za-z]/) { u = toupper(R[i]); if (u ~ C) return u; break }
+  for (i = 1; i <= n; i++) if (R[i] ~ C) return R[i]
+  for (i = 1; i <= n; i++) { u = toupper(R[i]); if (u ~ C) return u }
+  return ""
+}'
 if [ -f "$DEF" ]; then
-  grep -E '^\|[[:space:]]*D-' "$DEF" | awk -F'|' '{
+  tr -d '\r' < "$DEF" | grep -E '^\|[[:space:]]*D-' | LC_ALL=C awk -F'|' "$DEF_STATUS_AWK"'{
       id = $2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", id)
       last = ""; for (i = NF; i >= 1; i--) { c = $i; gsub(/[[:space:]]/, "", c); if (c != "") { last = $i; break } }
-      s = toupper(last); gsub(/[^A-Z-]+/, " ", s); n = split(s, T, " "); st = ""
-      for (i = 1; i <= n; i++) if (T[i] ~ /^(OPEN|PARTIAL|DONE|WONTFIX|ACCEPTED-SKELETON)$/) { st = T[i]; break }
-      print id "\t" st }' > "$W/dstat"
+      print id "\t" defstat(last) }' > "$W/dstat"
   awk -F'\t' '$2 == "OPEN" || $2 == "PARTIAL" {print $1}' "$W/dstat" >> "$EXPECTED"
 fi
 dstatus() { awk -F'\t' -v id="$1" '$1 == id {print $2; exit}' "$W/dstat"; }
@@ -157,6 +194,7 @@ if [ -f "$MATRIX" ]; then
   fi
 fi
 sort -u "$EXPECTED" -o "$EXPECTED"
+grep -v '^$' "$EXPECTED" > "$W/e.t"; mv "$W/e.t" "$EXPECTED"
 
 # ── The backlog: sources cells, bl_id, status ────────────────────────────────
 # CSV columns: bl_id, title, type, sources, req_ids, package, blocks, landing, gate, size, status
@@ -199,8 +237,9 @@ if [ -f "$READY" ] && grep -qwE 'TBD' "$READY"; then
 fi
 
 NI="$(wc -l < "$ISSUES" | tr -d ' ')"; NE="$(wc -l < "$EXPECTED" | tr -d ' ')"
+VAC=false; [ "$NE" -eq 0 ] && [ "$ALLOW_EMPTY" -eq 0 ] && VAC=true
 {
-  printf '{"schema":"backlog-check/2","backlog":"%s","expectedSources":%s,' "$CSV" "$NE"
+  printf '{"schema":"backlog-check/2","backlog":"%s","expectedSources":%s,"vacuous":%s,' "$CSV" "$NE" "$VAC"
   printf '"sums":{"requirements":%s,"engineeringClosed":%s,"requirementSatisfied":%s},"issues":[' "${NREQ:-0}" "${SUM_E:-null}" "${SUM_R:-null}"
   first=1
   while IFS="$(printf '\t')" read -r k m; do
@@ -213,6 +252,12 @@ NI="$(wc -l < "$ISSUES" | tr -d ' ')"; NE="$(wc -l < "$EXPECTED" | tr -d ' ')"
 
 echo "check-backlog: $CSV (expected sources: $NE)"
 [ -n "$SUM_E" ] && echo "  sums: engineering closed $SUM_E / $NREQ · requirement satisfied $SUM_R / $NREQ (MET-ENGINEERED is never counted as MET)"
+if [ "$VAC" = true ]; then
+  echo "  ✗ 0 expected sources — refusing to call this complete: nothing was gathered from $TICKETS/DEFERRALS.md, $BUILD/COVERAGE_MATRIX.csv or $ADR_DIR (wrong build_dir / tickets_dir? pass docs/build/BACKLOG.csv docs/build docs/tickets, or --allow-empty if the build truly owes nothing)"
+  [ "$NI" -eq 0 ] || { echo "  ✗ $NI issue(s):"; sed -E 's/\t/: /' "$ISSUES" | sed 's/^/    - /'; }
+  echo "  JSON: $JSON"
+  exit 3
+fi
 if [ "$NI" -eq 0 ]; then
   echo "  ✓ complete + non-duplicating + verdict-consistent"
   echo "  ~ reminder: OPEN FINDINGS and spec-register deferred rows have no ids — confirm by eye."

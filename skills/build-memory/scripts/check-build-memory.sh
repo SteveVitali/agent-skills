@@ -33,15 +33,23 @@
 #   - Depends on: only points backward (no forward dependency)
 #   - skeletons: Kind: skeleton has NO Run: line
 #   - DEFERRALS.md: ids unique; a canonical status {OPEN,PARTIAL,DONE,WONTFIX,ACCEPTED-SKELETON}
-#     appears as a word in each row's last cell (markdown/prose around it tolerated);
-#     no OPEN row scoped to a gate whose readout says PASSED (a readout's `Status:` line,
-#     when present, decides); warn: an OPEN/PARTIAL kind-P row lacks owner:/trigger: (rule 5)
+#     appears as a word in each row's last cell (markdown/prose around it tolerated). The row's
+#     status is the LEADING one: the cell's first word when canonical, else the earliest canonical
+#     status in capitals ("DONE 2026-09-20 — was: OPEN" is DONE; BL-61).
+#     No OPEN row owed to a gate whose readout says PASSED (a readout's `Status:` line, when present,
+#     decides). A row is owed to a gate by its owner clause: the gate id after "owed at|to|by" /
+#     "scoped to" / "due at|by" / "owner:" in the status cell when that cell names an owner, else a
+#     gate id in the `unblocked by` cell — never a gate merely mentioned (the item, the verify cell,
+#     kept history) or a readout path (BL-60). Warn: an OPEN/PARTIAL kind-P row lacks owner:/trigger:
+#     (rule 5)
 #   - ADRs: files <-> generated index (regenerate + diff; an index the pre-0.5.0 parser produced
 #     only warns); every ADR has ## Revisit trigger; spec ADR appendix equals the file set when
 #     resolvable; an index cell that reads `—` warns (fails for an ADR added after the guards marker)
 #   - LEDGER.md: the CURRENT STATE key set present and in order (optional `harness` only between
 #     round and updatedAt); nextTicket names a chain row or DONE; every PHASE LOG "done" entry has a
-#     BUILD_INDEX row and runs/<ID>.md. The PHASE LOG parser strips `*`/`_`/backtick markup and
+#     BUILD_INDEX row and runs/<ID>.md ("done" is a standalone lowercase word — never one inside a
+#     branch name, path or file name such as `x/round3-t44-text-done` or `pr/done.md`, T44).
+#     The PHASE LOG parser strips `*`/`_`/backtick markup and
 #     reports candidates/evaluated; an entry that parses only after stripping markup is judged
 #     guarded (older PHASE LOG regions: warn). Exit 3 (vacuous) when done entries exist but fewer
 #     than half parse.
@@ -528,56 +536,80 @@ fi
 
 # ── 5. DEFERRALS.md ids unique + valid statuses ──────────────────────────────
 DEF="$TICKETS/DEFERRALS.md"
+# DEF_STATUS_AWK — the one status parse for a DEFERRALS row's status cell (BL-61). Markup (`*`, `_`,
+# backticks) is stripped and the cell split into words (hyphens kept, so ROOT-CAUSED is one word that
+# matches nothing). The LEADING status wins: the cell's first word when it is a canonical status (any
+# case); else the earliest canonical status written in capitals ("Verified DONE …; OPEN for a live
+# fixture" → DONE); else the earliest in any case. So "DONE 2026-09-20 — was: OPEN" is DONE, never
+# OPEN. "" when the cell holds no canonical status (an orphan).
+DEF_STATUS_AWK='
+function defstat(c,   s, n, i, R, u, C) {
+  C = "^(OPEN|PARTIAL|DONE|WONTFIX|ACCEPTED-SKELETON)$"
+  s = c; gsub(/[*_`]/, "", s); n = split(s, R, /[^A-Za-z-]+/)
+  for (i = 1; i <= n; i++) if (R[i] ~ /[A-Za-z]/) { u = toupper(R[i]); if (u ~ C) return u; break }
+  for (i = 1; i <= n; i++) if (R[i] ~ C) return R[i]
+  for (i = 1; i <= n; i++) { u = toupper(R[i]); if (u ~ C) return u }
+  return ""
+}'
 if [ -f "$DEF" ]; then
-  DEF_IDS="$(newtmp)"
-  # table rows whose first cell is an id like D-<TICKET>-<n>
-  grep -E '^\|[[:space:]]*D-' "$DEF" | while IFS= read -r row; do
-    id="$(printf '%s' "$row" | sed -E 's/^\|[[:space:]]*//; s/[[:space:]]*\|.*$//')"
-    # The status is the first canonical token appearing (as a whole word) in the last cell,
-    # tolerating markdown emphasis and status prose (e.g. "**PARTIAL (date):** …" or a migrated
-    # cell like "…DONE…; OPEN for a live fixture"). Hyphens are kept so compound words like
-    # ROOT-CAUSED don't spuriously match a canonical token.
-    lastcell="$(printf '%s' "$row" | sed -E 's/[[:space:]]*\|[[:space:]]*$//' | awk -F'|' '{print $NF}' | tr 'a-z' 'A-Z')"
-    toks=" $(printf '%s' "$lastcell" | sed -E 's/[^A-Z-]+/ /g') "
-    status=""
-    for cand in OPEN PARTIAL DONE WONTFIX ACCEPTED-SKELETON; do
-      case "$toks" in *" $cand "*) status="$cand"; break ;; esac
-    done
-    printf '%s\n' "$id" >> "$DEF_IDS"
-    if [ -z "$status" ]; then
-      shown="$(printf '%s' "$lastcell" | sed -E 's/^[^A-Za-z]*//; s/[^A-Za-z-].*$//')"
-      viol deferrals "DEFERRALS row $id has an invalid (orphan) status '$shown'" "docs/tickets/DEFERRALS.md" "$id"
-    fi
-  done
-  if [ -s "$DEF_IDS" ]; then
-    sort "$DEF_IDS" | uniq -d | while IFS= read -r dup; do
-      [ -n "$dup" ] && viol deferrals "duplicate DEFERRALS id '$dup'" "docs/tickets/DEFERRALS.md" "$dup"
-    done
-  fi
-  # P (human-prerequisite) rows still owed must be scheduled: owner: + trigger: in
-  # `unblocked by` (DEFERRALS rule 5). Warning in tree mode; history mode (check-history.sh) fails
-  # such rows ADDED under the guards marker. Header-aware: each table's own `kind` /
-  # `unblocked by` columns are located from its `| id | … |` header row.
-  LC_ALL=C awk -F'|' '
+  DEF_ROWS="$(newtmp)"
+  # One record per `| D-… |` row, fields split on \037:
+  #   id · status ("-" = orphan) · shown (the orphan's first word) · P-unscheduled 0|1 · owed gates ("-" = none)
+  # Header-aware: each table's own `kind` / `unblocked by` columns come from its `| id | … |` header row
+  # (`unblocked by` defaults to column 4, the template's). A row is OWED TO a gate by its owner clause
+  # (BL-60): when the status cell names an owner ("owed at|to|by", "scoped to", "due at|by", "owner:") —
+  # the way a row is re-owned, since cells only grow — the gate ids right after those words; otherwise
+  # the gate ids in its `unblocked by` cell. A gate id merely mentioned elsewhere (the item, the verify
+  # cell, kept history) or written as a path (`readouts/GATE-G3.md`) is not an owner.
+  LC_ALL=C awk -F'|' "$DEF_STATUS_AWK"'
     function trim(x) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", x); return x }
+    function gates(x, any,   out, s, l, g, pre, post, a) {
+      out = ""; s = x; gsub(/[*`]/, "", s)
+      while (match(s, /GATE-[A-Za-z0-9]+/)) {
+        g = substr(s, RSTART, RLENGTH); pre = (RSTART > 1) ? substr(s, RSTART - 1, 1) : ""
+        post = substr(s, RSTART + RLENGTH, 2); l = (RSTART > 24) ? substr(s, RSTART - 24, 24) : substr(s, 1, RSTART - 1)
+        s = substr(s, RSTART + RLENGTH)
+        if (pre ~ /[\/A-Za-z0-9_.-]/ || post ~ /^[\/A-Za-z0-9_-]/ || post ~ /^\.[A-Za-z0-9]/) continue
+        if (!any) { a = tolower(l); if (a !~ /(owed[[:space:]]+(at|to|by)|scoped[[:space:]]+to|due[[:space:]]+(at|by)|owner:)[[:space:]]*$/) continue }
+        out = out " " toupper(g)
+      }
+      return out
+    }
     /^\|[[:space:]]*id[[:space:]]*\|/ {
       kc = 0; uc = 0
       for (i = 1; i <= NF; i++) { c = tolower(trim($i)); if (c == "kind") kc = i; if (c == "unblocked by") uc = i }
       next
     }
-    /^\|[[:space:]]*D-/ && kc {
-      k = $kc; gsub(/[[:space:]*`_]/, "", k); if (k != "P") next
+    /^\|[[:space:]]*D-/ {
+      id = trim($2)
       last = ""; for (i = NF; i >= 1; i--) if (trim($i) != "") { last = $i; break }
-      s = toupper(last); gsub(/[^A-Z-]+/, " ", s); s = " " s " "
-      if (!index(s, " OPEN ") && !index(s, " PARTIAL ")) next
-      cell = uc ? $uc : $0
-      if (cell !~ /owner:/ || cell !~ /trigger:/) print trim($2)
-    }' "$DEF" 2>/dev/null | while IFS= read -r pid; do
-    [ -n "$pid" ] && warn deferrals "DEFERRALS row $pid (kind P, still owed) has no owner:/trigger: in 'unblocked by' (rule 5: human work is scheduled)" "docs/tickets/DEFERRALS.md" "$pid"
+      st = defstat(last)
+      shown = toupper(last); sub(/^[^A-Za-z]*/, "", shown); sub(/[^A-Za-z-].*$/, "", shown)
+      ucell = uc ? $uc : (NF > 5 ? $5 : "")
+      p = 0
+      if (kc && (st == "OPEN" || st == "PARTIAL")) {
+        k = $kc; gsub(/[[:space:]*`_]/, "", k)
+        cell = uc ? $uc : $0
+        if (k == "P" && (cell !~ /owner:/ || cell !~ /trigger:/)) p = 1
+      }
+      so = tolower(last); gsub(/[*`]/, "", so)
+      g = (so ~ /(owed[[:space:]]+(at|to|by)|scoped[[:space:]]+to|due[[:space:]]+(at|by)|owner:)/) ? gates(last, 0) : gates(ucell, 1); sub(/^ /, "", g)
+      print id "\037" (st == "" ? "-" : st) "\037" (shown == "" ? "-" : shown) "\037" p "\037" (g == "" ? "-" : g)
+    }' "$DEF" > "$DEF_ROWS" 2>/dev/null
+  while IFS="$(printf '\037')" read -r id st shown p g; do
+    [ "$st" = "-" ] && viol deferrals "DEFERRALS row $id has an invalid (orphan) status '${shown#-}'" "docs/tickets/DEFERRALS.md" "$id"
+    # P (human-prerequisite) rows still owed must be scheduled: owner: + trigger: in `unblocked by`
+    # (DEFERRALS rule 5). Warning in tree mode; history mode (check-history.sh) fails such rows ADDED
+    # under the guards marker.
+    [ "$p" = "1" ] && warn deferrals "DEFERRALS row $id (kind P, still owed) has no owner:/trigger: in 'unblocked by' (rule 5: human work is scheduled)" "docs/tickets/DEFERRALS.md" "$id"
+  done < "$DEF_ROWS"
+  cut -d"$(printf '\037')" -f1 "$DEF_ROWS" | sort | uniq -d | while IFS= read -r dup; do
+    [ -n "$dup" ] && viol deferrals "duplicate DEFERRALS id '$dup'" "docs/tickets/DEFERRALS.md" "$dup"
   done
-  # no OPEN row scoped to a gate whose readout says PASSED. A readout with a `Status:` line
-  # (templates/READOUT.md) is judged by that line alone, comments stripped; older readouts
-  # by the legacy whole-file match.
+  # No OPEN row owed to a gate whose readout says PASSED (BL-60: the row's leading status is OPEN and the
+  # gate is its owner, as above — not a gate named anywhere in the row). A readout with a `Status:` line
+  # (templates/READOUT.md) is judged by that line alone, comments stripped; older readouts by the legacy
+  # whole-file match.
   if [ -d "$BUILD/readouts" ]; then
     for ro in "$BUILD"/readouts/GATE-*.md; do
       [ -f "$ro" ] || continue
@@ -589,10 +621,9 @@ if [ -f "$DEF" ]; then
         ro_passed=1
       fi
       if [ "$ro_passed" -eq 1 ]; then
-        g="$(basename "$ro" .md)"   # e.g. GATE-G1
-        if grep -E '^\|[[:space:]]*D-' "$DEF" | grep -iE '\bOPEN\b' | grep -qF "$g"; then
-          viol deferrals "an OPEN DEFERRALS row references $g whose readout says PASSED" "docs/tickets/DEFERRALS.md" "" "$g"
-        fi
+        g="$(basename "$ro" .md | tr 'a-z' 'A-Z')"   # e.g. GATE-G1
+        owed="$(awk -F'\037' -v g="$g" '$2 == "OPEN" && index(" " $5 " ", " " g " ") {print $1}' "$DEF_ROWS" | tr '\n' ' ' | sed -E 's/ $//')"
+        [ -n "$owed" ] && viol deferrals "OPEN DEFERRALS row(s) $owed owed to $g, whose readout says PASSED — close or re-own them" "docs/tickets/DEFERRALS.md" "" "$g"
       fi
     done
   fi
@@ -736,6 +767,17 @@ if [ -f "$LEDGER" ]; then
   PL="$(newtmp)"
   has_pl=0; grep -qE '^##[[:space:]]+PHASE LOG' "$LEDGER" && has_pl=1
   IDRE="^${ID_RE}" LC_ALL=C awk -v haspl="$has_pl" '
+    # closeword(s): s holds "done" as a ticket-close word — a standalone lowercase word, not part of a
+    # branch name, path or file name (`svitali/round3-t44-text-done`, `feature/done`, `pr/done.md`).
+    function closeword(s,   t, p, a, b, c) {
+      t = s
+      while ((p = index(t, "done")) > 0) {
+        a = (p > 1) ? substr(t, p - 1, 1) : ""; b = substr(t, p + 4, 1); c = substr(t, p + 5, 1)
+        if (a !~ /[A-Za-z0-9\/._-]/ && b !~ /[A-Za-z0-9\/_-]/ && !(b == "." && c ~ /[A-Za-z0-9]/)) return 1
+        t = substr(t, p + 1)
+      }
+      return 0
+    }
     /^##[[:space:]]/ { inlog = (!haspl) || ($0 ~ /^##[[:space:]]+PHASE LOG/ && $0 !~ /^##[[:space:]]+PHASE LOG[[:space:]]+INDEX/); if (inlog) region++; next }
     (inlog || !haspl) && /^-[[:space:]]/ {
       raw = $0; s = raw; gsub(/[*_`]/, "", s); mk = (s != raw)
@@ -746,8 +788,8 @@ if [ -f "$LEDGER" ]; then
         rest = substr(s, p + length("—")); sub(/^[[:space:]]+/, "", rest)
         q = index(rest, " — "); head = q ? substr(rest, 1, q - 1) : rest
         if (match(rest, ENVIRON["IDRE"])) { id = substr(rest, RSTART, RLENGTH); nx = substr(rest, RLENGTH + 1, 1); if (nx != "" && nx !~ /[[:space:]:,(]/) id = "" }
-        isdone = (head ~ /(^|[^A-Za-z-])done([^A-Za-z-]|$)/)
-      } else if (s ~ /(^|[^A-Za-z-])done([^A-Za-z-]|$)/) { head = s; isdone = 1 }
+        isdone = closeword(head)
+      } else if (closeword(s)) { head = s; isdone = 1 }
       print NR "\t" (region + 0) "\t" "R" "\t" mk "\t" id "\t" isdone "\t" lead "\t" head
     }' "$LEDGER" > "$PL.raw"
   lastreg="$(awk -F'\t' '{r = $2} END {print r + 0}' "$PL.raw")"

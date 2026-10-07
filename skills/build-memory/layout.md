@@ -649,10 +649,14 @@ added line takes the committer time of the commit in the range that added it.
 `scripts/check-build-memory.sh [repo] [--json PATH]` — bash 3.2, read-only. **Tree mode**
 (default) checks everything derived: layout, ticket grammar + unique ids, manifest ↔ files,
 backward `Depends on`, skeletons without run lines, markers referenced, DEFERRALS ids +
-statuses, no OPEN row past a PASSED gate, ADR ↔ index (BM-ADR-02), revisit triggers, ledger key
-order (optional `harness` in its slot), `nextTicket` validity, PHASE-LOG-done ↔ BUILD_INDEX +
-runs (the parser strips markup and reports `candidates`/`evaluated`), REQ coverage when the spec
-and `req_id_pattern` resolve, size + secrets.
+statuses (a row's status is its **leading** canonical status, so `DONE … — was: OPEN` is DONE), no
+OPEN row **owed to** a PASSED gate (the gate in the status cell's owner clause — `owed at|to|by`,
+`scoped to`, `due at|by`, `owner:` — or, when that cell names no owner, in `unblocked by`; a gate
+merely mentioned elsewhere in the row is not an owner), ADR ↔ index (BM-ADR-02), revisit triggers,
+ledger key order (optional `harness` in its slot), `nextTicket` validity, PHASE-LOG-done ↔
+BUILD_INDEX + runs (the parser strips markup and reports `candidates`/`evaluated`; `done` counts
+only as a standalone word, never inside a branch name or path such as `x/t44-text-done`), REQ
+coverage when the spec and `req_id_pattern` resolve, size + secrets.
 
 - **Guarded** (BM-COMPAT-06): the CURRENT STATE vocabularies (`projectStatus`, `pauseRequested`,
   `mergePolicy`, `autonomy`, integer `round`, ISO `updatedAt`); the BM-LEDGER-08 budget and shape

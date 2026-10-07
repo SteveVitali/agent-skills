@@ -63,8 +63,8 @@ bash scripts/check-build-memory.sh . --planning docs/research-ledger.md   # plan
 
 It checks everything the skills derive (layout allowlist + `logs/.gitignore`; ticket filename
 grammar + unique sequence; manifest ↔ files both ways; backward `Depends on`; skeletons carry
-no run line; markers referenced; DEFERRALS ids unique + valid statuses; no OPEN row past a
-PASSED gate; ADR files ↔ generated index; every ADR has `## Revisit trigger`; spec ADR
+no run line; markers referenced; DEFERRALS ids unique + valid statuses (the leading status
+wins); no OPEN row owed to a PASSED gate (by its owner clause, not a mention); ADR files ↔ generated index; every ADR has `## Revisit trigger`; spec ADR
 appendix == file set when present; `LEDGER.md` key set + order and `nextTicket`; PHASE-LOG
 "done" ↔ `BUILD_INDEX` row + `runs/<ID>.md`; REQ→ticket coverage when the spec and
 `req_id_pattern` resolve; size + secret scans; the ledger budget and shape, BM-LEDGER-08; the

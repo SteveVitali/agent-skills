@@ -67,7 +67,11 @@ exit-code-gated and runnable in CI.
 - **The validator reads structure, not meaning.** It confirms a ticket cites a requirement id
   that exists; it cannot confirm the ticket actually *satisfies* it — that is the worker's
   gap analysis and the capstone's job.
-- **The "no OPEN row past a PASSED gate" check keys on the gate id appearing in the row.** A
+- **The "no OPEN row past a PASSED gate" check keys on the row's owner clause.** A row is owed
+  to a gate when its status cell says "owed at `GATE-G<k>`" (or `scoped to`, `due at|by`,
+  `owner:`), or — when the status cell names no owner — when `unblocked by` cites the gate id.
+  A gate merely mentioned (history, the verify cell, a readout path) is not an owner, and a row
+  re-owned by an appended "owed at T9" in its status cell is not owed to the gate any longer. A
   deferral scoped to a phase but not naming its gate id will not be caught; scope deferrals by
   citing the gate.
 - **Not a scheduler or a merge tool.** Sequencing, merging, and CI are deliberately elsewhere

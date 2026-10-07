@@ -584,6 +584,64 @@ test_reqcov() {
   [ "$ok" = 1 ] && say "PASS v2-reqcov"
 }
 
+# ── 0.5.3 — validator false positives found closing the fsq cost build (BL-60, BL-61, T44) ──
+# Each "false positive" assertion fails against 0.5.2; each "true positive" one passes on both.
+test_053() {
+  local ok=1 W L D out rc
+  # BL-60: OPEN × PASSED reads the row's leading status and the gate the row is owed to (its
+  # `unblocked by` cell, or "owed at <gate>" in its status cell) — not a gate or an "open" anywhere
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; D="$W/docs/tickets/DEFERRALS.md"; mkdir -p "$W/docs/build/readouts"
+  printf '# GATE-G1 readout\nStatus: PASSED\n' > "$W/docs/build/readouts/GATE-G1.md"
+  cat >> "$D" <<'EOF'
+| D-T2-2 | drawer copy | time | T9 | open a team drawer; GATE-G1 named it | none | WONTFIX — copy dropped |
+| D-T2-3 | gate metric | data | GATE-G1 | rerun | none | DONE 2026-09-10 (rerun green) — was: OPEN, owed at GATE-G1 |
+| D-T2-4 | OPEN FINDINGS tidy | time | T9 | read GATE-G1 | none | DONE 2026-09-10 |
+| D-T2-5 | later leg | budget | T9 | rerun | none | OPEN — routed to T9 by readouts/GATE-G1.md after GATE-G1 passed |
+| D-T2-6 | other gate | budget | GATE-G10 | rerun | none | OPEN |
+| D-T2-13 | re-owned | budget | GATE-G1 | rerun | none | OPEN — owed at T9 (re-owned by the GATE-G1 readout) |
+EOF
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  { [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -qF "owed to GATE-G1"; } \
+    || { fail "0.5.3 BL-60: a mention of a PASSED gate (or a lowercase 'open') failed the check (exit=$rc)"; printf '%s\n' "$out" | grep deferrals | sed 's/^/      /'; ok=0; }
+  # true positives: an OPEN row owed to the passed gate — by `unblocked by`, or "owed at" in the status cell
+  printf '| D-T2-7 | live leg | budget | GATE-G1 | rerun | none | OPEN |\n| D-T2-8 | live leg 2 | budget | T9 | rerun | none | **OPEN** — owed at `GATE-G1` |\n' >> "$D"
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  { [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -qF "OPEN DEFERRALS row(s) D-T2-7 D-T2-8 owed to GATE-G1, whose readout says PASSED"; } \
+    || { fail "0.5.3 BL-60: an OPEN row owed to a PASSED gate was not failed (exit=$rc)"; ok=0; }
+  # BL-61: the leading status wins — a DONE kind-P row whose kept history says OPEN is not owed (no rule-5
+  # warning); an OPEN one still warns; a cell with no canonical status is still an orphan
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; D="$W/docs/tickets/DEFERRALS.md"
+  printf '\n| id | item | why deferred | unblocked by | how to verify | proxy now | kind | status |\n|---|---|---|---|---|---|---|---|\n' >> "$D"
+  printf '| D-T2-9 | sign | operator only | the operator | readout | none | P | DONE 2026-09-10 (signed) — was: OPEN |\n' >> "$D"
+  printf '| D-T2-10 | sign 2 | operator only | the operator | readout | none | P | Verified DONE 2026-09-10; OPEN only for a live fixture |\n' >> "$D"
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  { [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -qF "kind P, still owed"; } \
+    || { fail "0.5.3 BL-61: a DONE row whose history says OPEN was read as OPEN (exit=$rc)"; printf '%s\n' "$out" | grep deferrals | sed 's/^/      /'; ok=0; }
+  printf '| D-T2-11 | sign 3 | operator only | the operator | readout | none | P | **OPEN** (2026-09-10) — was DONE in error |\n| D-T2-12 | odd | x | T9 | x | none | P | ROOT-CAUSED |\n' >> "$D"
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  { [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -qF "DEFERRALS row D-T2-11 (kind P, still owed)" \
+    && printf '%s' "$out" | grep -qF "DEFERRALS row D-T2-12 has an invalid (orphan) status 'ROOT-CAUSED'"; } \
+    || { fail "0.5.3 BL-61: an OPEN P row was not warned, or an orphan status passed (exit=$rc)"; ok=0; }
+  # T44: "done" inside a branch name, path or file name is not a ticket-close word
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; L="$W/docs/build/LEDGER.md"
+  cat >> "$L" <<'EOF'
+- 2026-09-10 — DONE · branch svitali/round3-t2-text-done · PR #2 · next → DONE
+- 2026-09-10 — T2 landed · branch demo/done · next → DONE
+- 2026-09-10 — T2 landed · see docs/build/done/notes.md and pr/done.md · next → DONE
+- note: branch feature/done merged
+EOF
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" --json "$W/r.json" 2>&1)"; rc=$?
+  { [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -qF "PHASE LOG marks" && grep -qF '"phase-log-done":{"candidates":1,"evaluated":1}' "$W/r.json"; } \
+    || { fail "0.5.3 T44: a branch or path ending in 'done' was read as a ticket close (exit=$rc)"; printf '%s\n' "$out" | grep -E 'index|vacuous' | sed 's/^/      /'; ok=0; }
+  # true positive: a real "T2 done" entry (whose branch also ends in -done) still demands its index row + run file
+  printf -- '- 2026-09-10 — T2 done — branch demo/t2-done · PR #2 · next → DONE\n' >> "$L"
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  { [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -qF "PHASE LOG marks T2 done (line" \
+    && printf '%s' "$out" | grep -qF "BUILD_INDEX.md has no row for it"; } \
+    || { fail "0.5.3 T44: a real T2 done entry without a BUILD_INDEX row passed (exit=$rc)"; ok=0; }
+  [ "$ok" = 1 ] && say "PASS 0.5.3-fixes"
+}
+
 say "build-memory self-test"
 test_clean
 test_violations
@@ -602,6 +660,7 @@ test_new_files
 test_planning
 test_history
 test_reqcov
+test_053
 
 if [ "$FAIL" -eq 0 ]; then
   say "ALL PASS"

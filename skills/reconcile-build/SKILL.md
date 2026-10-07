@@ -55,7 +55,7 @@ zero times or more than once. That is the backlog's contract: complete and non-d
 
 | Script | Role |
 |---|---|
-| `scripts/check-backlog.sh` | verify the backlog is complete + non-duplicating with live homes; verdicts consistent with DEFERRALS (BM-VERDICT-01); the two sums vs CAP.3; ids unique; statuses valid |
+| `scripts/check-backlog.sh` | verify the backlog is complete + non-duplicating with live homes; verdicts consistent with DEFERRALS (BM-VERDICT-01); the two sums vs CAP.3; ids unique; statuses valid. An empty gather (0 expected ids) exits 3, never 0; `--allow-empty` for a build that owes nothing |
 | `scripts/merge-dryrun.sh` | report, per chain PR/branch, whether a clean merge is possible and (`--ci`) its current check state — **never merges** |
 
 ## What this skill does NOT do

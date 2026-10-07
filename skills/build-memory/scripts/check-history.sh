@@ -61,6 +61,19 @@
 
 set -o pipefail
 
+# The leading-status parse of a DEFERRALS status cell — the same rule as check-build-memory.sh's
+# DEF_STATUS_AWK (BL-61): the cell's first word when canonical, else the earliest canonical status in
+# capitals, else the earliest in any case. "DONE 2026-09-20 — was: OPEN" is DONE.
+DEF_STATUS_AWK='
+function defstat(c,   s, n, i, R, u, C) {
+  C = "^(OPEN|PARTIAL|DONE|WONTFIX|ACCEPTED-SKELETON)$"
+  s = c; gsub(/[*_`]/, "", s); n = split(s, R, /[^A-Za-z-]+/)
+  for (i = 1; i <= n; i++) if (R[i] ~ /[A-Za-z]/) { u = toupper(R[i]); if (u ~ C) return u; break }
+  for (i = 1; i <= n; i++) if (R[i] ~ C) return R[i]
+  for (i = 1; i <= n; i++) { u = toupper(R[i]); if (u ~ C) return u }
+  return ""
+}'
+
 REPO="" ; MODE="" ; ARG="" ; JSON="" ; NOW_ARG="" ; NO_HOOK=0
 usage() { awk 'NR > 1 && !/^#/ {exit} NR > 1 {sub(/^# ?/, ""); print}' "$0"; }
 while [ $# -gt 0 ]; do
@@ -420,7 +433,7 @@ while IFS="$(printf '\t')" read -r st path; do
         fi
       done
       # rows ADDED (new ids): status dates; under the guards marker an owed P row must be scheduled (rule 5)
-      LC_ALL=C awk -F'|' -v af="$W/arows" -v chg="$W/def.changed" -v p="$path" '
+      LC_ALL=C awk -F'|' -v af="$W/arows" -v chg="$W/def.changed" -v p="$path" "$DEF_STATUS_AWK"'
         function trim(x) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", x); return x }
         BEGIN { while ((getline l < af) > 0) { split(l, x, "\t"); A[x[1]] = 1 } while ((getline l < chg) > 0) C[l] = 1 }
         /^\|[[:space:]]*id[[:space:]]*\|/ { kc = uc = 0; for (i = 1; i <= NF; i++) { c = tolower(trim($i)); if (c == "kind") kc = i; if (c == "unblocked by") uc = i } next }
@@ -429,7 +442,7 @@ while IFS="$(printf '\t')" read -r st path; do
           s = $0; while (match(s, /(OPEN|PARTIAL|DONE|WONTFIX|ACCEPTED-SKELETON|DEFERRED-AGAIN)[^0-9|]*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)) { print "D\t" p "\t" NR "\tact\t" substr(s, RSTART + RLENGTH - 10, 10) "\t" $0; s = substr(s, RSTART + RLENGTH) }
           if (kc) { k = $kc; gsub(/[[:space:]*`_]/, "", k)
             if (k == "P") { last = ""; for (i = NF; i >= 1; i--) if (trim($i) != "") { last = $i; break }
-              u = toupper(last); if (u ~ /OPEN|PARTIAL/) { cell = uc ? $uc : $0; if (cell !~ /owner:/ || cell !~ /trigger:/) print "P\t" id "\t" NR } } } }' "$W/head" > "$W/defadd"
+              u = defstat(last); if (u == "OPEN" || u == "PARTIAL") { cell = uc ? $uc : $0; if (cell !~ /owner:/ || cell !~ /trigger:/) print "P\t" id "\t" NR } } } }' "$W/head" > "$W/defadd"
       awk -F'\t' '$1 == "D" {print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6}' "$W/defadd" >> "$W/dates"
       awk -F'\t' '$1 == "P"' "$W/defadd" | while IFS="$(printf '\t')" read -r k id ln; do
         if [ "$GUARDS" -eq 1 ]; then sev=V; else sev=W; fi
