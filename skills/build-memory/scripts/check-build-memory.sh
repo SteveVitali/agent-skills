@@ -77,7 +77,12 @@
 #   - tests (BM-TEST-01; heuristic warning `living-pin?`): a tracked test file that names a living
 #     record file and one of its living keys
 #   - REQ coverage (when canonicalSpec + req_id_pattern resolve): every id a ticket cites
-#     exists in the spec; every in-scope id has exactly one owner
+#     exists in the spec, where the spec's ids include those it states as a range
+#     (REQ-X-1…20), a continuation (REQ-X-1 · -2) or a numbered list under a family's
+#     requirements line (OF-21); with `req_index_literal_from: <n>` in the manifest, every
+#     `## Requirement-ID → ticket index` row under `### Round <k>` (k ≥ n) is one literal id
+#     that the spec states, indexed once, to a chain ticket id or `deferred(<phase>)` (fail),
+#     and every id a Round-k ticket stamps is indexed to it (warn)
 #   - size + secrets: fixtures >1MB / any file >5MB under docs/build flagged; no secret
 #     token shapes in docs/build (incl. reports/digests/) or docs/tickets
 #
@@ -1076,17 +1081,124 @@ if [ -d "$BUILD/runs" ]; then
 fi
 
 # ── 8. REQ coverage (only when spec + pattern resolve) ───────────────────────
+# The spec's id set is every literal match of req_id_pattern PLUS the ids a spec states without
+# writing them out (OF-21: a literal matcher drops them, so the index loses them and tickets that
+# cite them draw false warnings). Three forms are expanded (spec_req_ids):
+#   (a) a range token         REQ-X-1…20 · REQ-X-1..20 · REQ-X-1–20 · REQ-X-1…REQ-X-20
+#   (b) a continuation        REQ-X-1 (…) · -2 (…) · -3     (same line, after a literal id)
+#   (c) a numbered list under a line that names the family without a number and says
+#       "requirements", e.g. **Spec requirements (`REQ-X`, owner N4):** then `1. …` or `- **X-3:** …`
+#       (the list ends at the next non-blank, non-indented line that is not a list item)
+# When the manifest carries `req_index_literal_from: <n>`, the `## Requirement-ID → ticket index`
+# rows under `### Round <k>` (k ≥ n) are validated (BM-MANIFEST-01): each row holds exactly one
+# literal id (no range, no family, no "item n"); the id is in the spec's set; no id is indexed
+# twice; the owner is a ticket id of the chain or `deferred(<phase>)`; and every id a Round-k
+# ticket stamps is indexed to that ticket. Without the line the index is not parsed (legacy
+# rounds wrote family/range tables), so existing repos see only the fewer false warnings.
+spec_req_ids() {   # $1 = spec file, $2 = req_id_pattern → literal + expanded ids, one per line
+  local ell ndash mid fam_re
+  ell="$(printf '\342\200\246')"; ndash="$(printf '\342\200\223')"; mid="$(printf '\302\267')"
+  fam_re="$(printf '%s' "$2" | sed -E 's/-\[0-9\]\+$//')"
+  [ "$fam_re" = "$2" ] && fam_re=""      # pattern does not end in -[0-9]+: only form (a)/(b) apply
+  LC_ALL=C sed "s/$ell/../g; s/$ndash/../g; s/$mid/ | /g" "$1" 2>/dev/null \
+    | LC_ALL=C awk -v ID="$2" -v FAM="$fam_re" '
+      function emit_range(pre, a, b,   i) { if (a <= b && b - a <= 500) for (i = a; i <= b; i++) print pre i }
+      function prefix(id) { sub(/[0-9]+$/, "", id); return id }
+      function num(id) { match(id, /[0-9]+$/); return substr(id, RSTART, RLENGTH) + 0 }
+      {
+        line = $0
+        # literal ids, ranges (a) and continuations (b), left to right
+        cur = ""; rest = line
+        while (match(rest, ID)) {
+          tok = substr(rest, RSTART, RLENGTH); print tok; cur = prefix(tok)
+          after = substr(rest, RSTART + RLENGTH)
+          if (match(after, "^[ ]?\\.\\.[ ]?(" ID ")")) {                      # REQ-X-1..REQ-X-20
+            hi = substr(after, RSTART, RLENGTH); sub(/^[ ]?\.\.[ ]?/, "", hi)
+            if (prefix(hi) == cur) emit_range(cur, num(tok), num(hi))
+          } else if (match(after, /^[ ]?\.\.[ ]?[0-9]+/)) {                  # REQ-X-1..20
+            hi = substr(after, RSTART, RLENGTH); gsub(/[^0-9]/, "", hi); emit_range(cur, num(tok), hi + 0)
+          }
+          rest = after
+          # continuations: " | -N" tokens up to the next literal id
+          seg = rest; if (match(seg, ID)) seg = substr(seg, 1, RSTART - 1)
+          while (match(seg, /[|][ ]*-[0-9]+/)) { c = substr(seg, RSTART, RLENGTH); gsub(/[^0-9]/, "", c); print cur c; seg = substr(seg, RSTART + RLENGTH) }
+        }
+        # (c) numbered list under a family requirements line
+        if (FAM != "") {
+          if (line ~ /[Rr]equirements/ && match(line, "[`(]" FAM "[`,)]")) {
+            f = substr(line, RSTART + 1, RLENGTH - 2); fam = f "-"; short = f; sub(/^.*-/, "", short); next
+          }
+          if (fam != "") {
+            if (line ~ /^[0-9]+\.[ \t]/) { n = line; sub(/\..*$/, "", n); print fam n; next }
+            if (match(line, /^[-*][ \t]+\*\*[A-Z][A-Z0-9-]*-[0-9]+:?\*\*/)) {
+              lab = substr(line, RSTART, RLENGTH); gsub(/^[-* \t]+|[*:]+$/, "", lab); gsub(/\*/, "", lab)
+              lp = lab; sub(/-[0-9]+$/, "", lp); sub(/^.*-/, "", lp)
+              if (lp == short) { print fam num(lab) }
+              next
+            }
+            if (line ~ /^[ \t]*$/ || line ~ /^[ \t]/ || line ~ /^[-*][ \t]/) next
+            fam = ""
+          }
+        }
+      }' | sort -u
+}
 if [ -n "$REQ_PATTERN" ] && [ -n "${SPEC:-}" ] && [ -f "${SPEC:-/nonexistent}" ]; then
-  spec_ids="$(grep -oE "$REQ_PATTERN" "$SPEC" 2>/dev/null | sort -u)"
-  if [ -d "$TICKETS" ] && [ -n "$spec_ids" ]; then
+  SPEC_IDS="$(newtmp)"
+  spec_req_ids "$SPEC" "$REQ_PATTERN" > "$SPEC_IDS"
+  if [ -d "$TICKETS" ] && [ -s "$SPEC_IDS" ]; then
     for f in "$TICKETS"/*.md; do
       [ -f "$f" ] || continue
       b="$(basename "$f")"; [ "$b" = "00_MANIFEST.md" ] && continue; is_companion "$b" && continue
       grep -oE "$REQ_PATTERN" "$f" 2>/dev/null | sort -u | while IFS= read -r rid; do
         [ -n "$rid" ] || continue
-        printf '%s\n' "$spec_ids" | grep -qxF "$rid" || warn reqcov "ticket $b cites $rid which is not in the spec" "docs/tickets/$b" "" "$rid"
+        grep -qxF "$rid" "$SPEC_IDS" || warn reqcov "ticket $b cites $rid which is not in the spec" "docs/tickets/$b" "" "$rid"
       done
     done
+  fi
+  # The manifest's requirement index, literal rows only (opt-in per round).
+  LIT_FROM="$(grep -m1 -iE '^[[:space:]]*req_index_literal_from:' "$MANIFEST" 2>/dev/null | sed -E 's/^[^:]*:[[:space:]]*//; s/[^0-9].*$//')"
+  if [ -n "$LIT_FROM" ] && [ -f "$MANIFEST" ]; then
+    IDX="$(newtmp)"   # <round>\t<lineno>\t<entry>\t<owner>
+    LC_ALL=C awk -v FROM="$LIT_FROM" '
+      /^##[[:space:]]+Requirement-ID/ { inidx = 1; rnd = 0; next }
+      inidx && /^##[[:space:]]/ { inidx = 0 }
+      inidx && /^###[[:space:]]+Round[[:space:]]+[0-9]+/ { r = $0; sub(/^###[[:space:]]+Round[[:space:]]+/, "", r); sub(/[^0-9].*$/, "", r); rnd = r + 0; next }
+      !inidx || rnd < FROM + 0 { next }
+      /^\|/ { n = split($0, c, "|"); e = c[2]; o = c[3]
+              if (e ~ /^[[:space:]]*-+[[:space:]]*$/ || tolower(e) ~ /req(uirement)?[ -]?id|family/) next }
+      /^[-*][[:space:]]/ { s = $0; sub(/^[-*][[:space:]]+/, "", s)
+              if (index(s, "→")) { e = substr(s, 1, index(s, "→") - 1); o = substr(s, index(s, "→") + 3) } else { e = s; o = "" } }
+      !/^\|/ && !/^[-*][[:space:]]/ { next }
+      { gsub(/`/, "", e); gsub(/^[[:space:]]+|[[:space:]]+$/, "", e); gsub(/`/, "", o); gsub(/^[[:space:]]+|[[:space:]]+$/, "", o)
+        print rnd "\t" NR "\t" e "\t" o }' "$MANIFEST" > "$IDX"
+    nidx="$(wc -l < "$IDX" | tr -d ' ')"; nok=0
+    SEEN_IDX="$(newtmp)"
+    while IFS="$(printf '\t')" read -r rnd ln entry owner; do
+      [ -n "$entry" ] || continue
+      if ! printf '%s\n' "$entry" | grep -qxE "$REQ_PATTERN"; then
+        viol reqindex "manifest index row (Round $rnd, line $ln) '$entry' is not exactly one literal requirement id (OF-21)" "docs/tickets/00_MANIFEST.md" "" "$entry"; continue
+      fi
+      grep -qxF "$entry" "$SPEC_IDS" || { viol reqindex "manifest index id $entry (line $ln) is not in the spec" "docs/tickets/00_MANIFEST.md" "" "$entry"; continue; }
+      if grep -qxF "$entry" "$SEEN_IDX"; then viol reqindex "manifest index lists $entry twice (every in-scope id has exactly one owner)" "docs/tickets/00_MANIFEST.md" "" "$entry"; continue; fi
+      printf '%s\n' "$entry" >> "$SEEN_IDX"
+      case "$owner" in
+        deferred\(*\)) nok=$((nok + 1)) ;;
+        *) if cut -f1 "$ID_SEQ" | grep -qxF "$owner"; then nok=$((nok + 1))
+           else viol reqindex "manifest index row for $entry names owner '$owner', which is no ticket id of the chain" "docs/tickets/00_MANIFEST.md" "" "$entry"; fi ;;
+      esac
+    done < "$IDX"
+    count reqindex "$nidx" "$nok"
+    # every id a Round-k (k ≥ from) ticket stamps is indexed to that ticket
+    awk -F'\t' -v FROM="$LIT_FROM" '{ r = $2; if (r ~ /Round[[:space:]]+[0-9]+/) { sub(/^.*Round[[:space:]]+/, "", r); sub(/[^0-9].*$/, "", r); if (r + 0 >= FROM + 0) print $3 } }' "$CHAIN_ROWS" | sort -u \
+      | while IFS= read -r b; do
+          [ -f "$TICKETS/$b" ] || continue
+          tid="$(awk -F'\t' -v B="$b" '$3 == B { print $1; exit }' "$ID_SEQ")"
+          LC_ALL=C awk '/^##[[:space:]]+Requirement IDs/ { s = 1; next } s && /^##[[:space:]]/ { s = 0 } s' "$TICKETS/$b" \
+            | grep -oE "$REQ_PATTERN" | sort -u | while IFS= read -r rid; do
+                got="$(awk -F'\t' -v R="$rid" '$3 == R { print $4; exit }' "$IDX")"
+                [ "$got" = "$tid" ] || warn reqindex "ticket $b stamps $rid but the manifest index assigns it to '${got:-nothing}'" "docs/tickets/$b" "" "$rid"
+              done
+        done
   fi
 fi
 

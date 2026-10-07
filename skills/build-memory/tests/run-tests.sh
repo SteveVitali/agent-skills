@@ -560,6 +560,30 @@ test_clock_tz() {
   [ "$ok" = 1 ] && say "PASS clock-tz"
 }
 
+# ── Fixture: v2-reqcov — non-literal spec ids and the literal requirement index (OF-21) ──
+test_reqcov() {
+  local W B ok=1 out rc
+  W="$(tmp)/repo"; cp -R "$HERE/v2-reqcov" "$W"; gitify "$W"
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] || { fail "v2-reqcov: clean check exit=$rc (want 0)"; ok=0; }
+  printf '%s' "$out" | grep -qE 'reqcov|reqindex' && { fail "v2-reqcov: range/continuation/list ids drew a reqcov or reqindex finding"; ok=0; }
+  # seeded defects: a range row, an unknown id, a twice-indexed id, an owner that is no ticket, an unindexed stamp
+  B="$(tmp)/repo"; cp -R "$HERE/v2-reqcov" "$B"
+  printf '%s\n' '| `BM-ENG-1…4` | T4 |' '| `BM-NOPE-9` | T3 |' '| `BM-STATE-3` | T4 |' '| `BM-ENG-2` | T9 |' > "$B/rows.tmp"
+  awk -v F="$B/rows.tmp" '{ print } /^\| `BM-ENG-3` \| T4 \|$/ { while ((getline l < F) > 0) print l }' "$B/docs/tickets/00_MANIFEST.md" > "$B/m.tmp" \
+    && mv "$B/m.tmp" "$B/docs/tickets/00_MANIFEST.md"; rm -f "$B/rows.tmp"
+  sed 's/^BM-HYP-2, BM-ENG-3\.$/BM-HYP-2, BM-ENG-3, BM-ENG-4./' "$B/docs/tickets/04_T4__engine-and-hypotheses.md" > "$B/t.tmp" \
+    && mv "$B/t.tmp" "$B/docs/tickets/04_T4__engine-and-hypotheses.md"
+  gitify "$B"
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$B" 2>&1)"; rc=$?
+  [ "$rc" -eq 1 ] || { fail "v2-reqcov: seeded check exit=$rc (want 1)"; ok=0; }
+  for kw in "'BM-ENG-1…4' is not exactly one literal requirement id" "BM-NOPE-9 (line" "lists BM-STATE-3 twice" \
+            "names owner 'T9'" "stamps BM-ENG-4 but the manifest index assigns it to 'nothing'"; do
+    printf '%s' "$out" | grep -qF "$kw" || { fail "v2-reqcov: output missing '$kw'"; ok=0; }
+  done
+  [ "$ok" = 1 ] && say "PASS v2-reqcov"
+}
+
 say "build-memory self-test"
 test_clean
 test_violations
@@ -577,6 +601,7 @@ test_051
 test_new_files
 test_planning
 test_history
+test_reqcov
 
 if [ "$FAIL" -eq 0 ]; then
   say "ALL PASS"
