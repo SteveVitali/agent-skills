@@ -3,6 +3,30 @@
 All notable changes to agent-skills are recorded here. Versioning is the plugin version in
 `.claude-plugin/plugin.json`.
 
+## 0.5.3 — build-memory exempts GATE-ACCEPT from the passed-gate check; agent-docs scans `docs/build/`, skips `.claude/`
+
+A patch release for two false positives. **Backward-compatible:** both checks only report fewer false findings; a real
+issue each check caught before is still caught.
+
+### Fixes
+1. **build-memory: an OPEN DEFERRALS row naming GATE-ACCEPT no longer fails when GATE-ACCEPT's readout says PASSED.**
+   GATE-ACCEPT is the accepted-deviations gate: a PASSED readout *means* the operator signed deviations that stay
+   dispositioned-but-OPEN by design. Phase gates (`GATE-G1`, `GATE-G2`, …) keep the check — an OPEN row scoped to a
+   passed phase gate is still a `deferrals` violation.
+2. **agent-docs: the freshness check indexes the committed build memory and skips agent-harness snapshots.** Its
+   `*/build/*` exclusion also hid `docs/build/` (this suite's own build-memory root, which check 1F requires), so every
+   AGENTS.md reference to a `docs/build/` file was reported as a critical "does not exist"; build-output `build/` dirs
+   are still excluded. `.claude/` (e.g. stale `.claude/worktrees/` snapshots) is no longer scanned for AGENTS.md files
+   or indexed.
+
+### Tests
+- `skills/build-memory/tests/run-tests.sh`: `test_passed_gate_deferrals` — a PASSED GATE-G1 with an OPEN row naming it is
+  a violation; a PASSED GATE-ACCEPT with an OPEN row naming it passes (fails against 0.5.2).
+- New `skills/agent-docs/tests/run-tests.sh` (the skill's first self-test): a throwaway repo citing `docs/build/` files,
+  a stale `.claude/worktrees/` AGENTS.md and a `build/gen/` output dir — committed build memory is found, the snapshot
+  is not scanned, `build/` stays excluded (fails against 0.5.2), and a genuinely missing `docs/build/` file is still
+  critical.
+
 ## 0.5.2 — build-memory `reqcov`: ids a spec states without writing them out; an opt-in literal requirement index
 
 A patch release for one defect and one opt-in check, found planning Episteme's Round 2 (OF-21; the proposal and its

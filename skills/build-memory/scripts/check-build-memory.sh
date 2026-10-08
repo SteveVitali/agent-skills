@@ -590,8 +590,14 @@ if [ -f "$DEF" ]; then
       fi
       if [ "$ro_passed" -eq 1 ]; then
         g="$(basename "$ro" .md)"   # e.g. GATE-G1
-        if grep -E '^\|[[:space:]]*D-' "$DEF" | grep -iE '\bOPEN\b' | grep -qF "$g"; then
-          viol deferrals "an OPEN DEFERRALS row references $g whose readout says PASSED" "docs/tickets/DEFERRALS.md" "" "$g"
+        # GATE-ACCEPT is exempt: it is the accepted-deviations gate — a PASSED readout
+        # *means* the operator signed deviations that stay dispositioned-but-OPEN by
+        # design. Phase gates (GATE-G1, GATE-G2, …) keep the check: an OPEN row scoped
+        # to a passed phase is a real violation.
+        if [ "$g" != "GATE-ACCEPT" ]; then
+          if grep -E '^\|[[:space:]]*D-' "$DEF" | grep -iE '\bOPEN\b' | grep -qF "$g"; then
+            viol deferrals "an OPEN DEFERRALS row references $g whose readout says PASSED" "docs/tickets/DEFERRALS.md" "" "$g"
+          fi
         fi
       fi
     done
