@@ -202,7 +202,7 @@ skills/<skill-name>/
 ├── modes/               # mode-specific step files, loaded on demand (where applicable)
 ├── scripts/             # supporting shell helpers (bash 3.2+ compatible)
 ├── templates/           # artifact templates a skill instantiates (e.g. build-memory)
-├── tests/               # fixture repos / stubs + run-tests.sh self-test (build-memory, orchestrate-build)
+├── tests/               # fixture repos / stubs + run-tests.sh self-test (build-memory, orchestrate-build, agent-docs)
 ├── guidelines.md        # shared authoring guidelines (where a skill owns one)
 └── checklists/          # supporting checklists / shared reference docs (where applicable)
 ```

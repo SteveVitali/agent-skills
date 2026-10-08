@@ -585,6 +585,27 @@ test_reqcov() {
 }
 
 say "build-memory self-test"
+# ── 0.5.3: an OPEN DEFERRALS row scoped to a PASSED gate fails, except GATE-ACCEPT (the accepted-deviations gate,
+#    whose signed deviations stay dispositioned-but-OPEN by design) ─────────────────────────────────────────────
+test_passed_gate_deferrals() {
+  local ok=1 W out rc
+  # a phase gate keeps the check: PASSED GATE-G1 + an OPEN row naming it is a violation
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; mkdir -p "$W/docs/build/readouts"
+  sed -e 's/^Status: PENDING/Status: PASSED/' "$HERE/../templates/READOUT.md" > "$W/docs/build/readouts/GATE-G1.md"
+  printf '| D-T2-9 | gated by GATE-G1 | pending | GATE-G1 | readout | none | OPEN |\n' >> "$W/docs/tickets/DEFERRALS.md"
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  { [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -qF "an OPEN DEFERRALS row references GATE-G1 whose readout says PASSED"; } \
+    || { fail "passed-gate: an OPEN row scoped to a PASSED GATE-G1 was not a violation (exit=$rc)"; ok=0; }
+  # GATE-ACCEPT is exempt: PASSED GATE-ACCEPT + an OPEN accepted-deviation row naming it passes
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; mkdir -p "$W/docs/build/readouts"
+  sed -e 's/^Status: PENDING/Status: PASSED/' "$HERE/../templates/READOUT.md" > "$W/docs/build/readouts/GATE-ACCEPT.md"
+  printf '| D-T2-9 | accepted deviation signed at GATE-ACCEPT | by design | GATE-ACCEPT | readout | none | OPEN |\n' >> "$W/docs/tickets/DEFERRALS.md"
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  { [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -qF "references GATE-ACCEPT whose readout says PASSED"; } \
+    || { fail "passed-gate: an OPEN row naming a PASSED GATE-ACCEPT was flagged (exit=$rc)"; ok=0; }
+  [ "$ok" = 1 ] && say "PASS passed-gate-deferrals"
+}
+
 test_clean
 test_violations
 test_legacy
@@ -602,6 +623,7 @@ test_new_files
 test_planning
 test_history
 test_reqcov
+test_passed_gate_deferrals
 
 if [ "$FAIL" -eq 0 ]; then
   say "ALL PASS"
