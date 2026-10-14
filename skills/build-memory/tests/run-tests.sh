@@ -587,6 +587,39 @@ test_reqcov() {
 say "build-memory self-test"
 # ── 0.5.3: an OPEN DEFERRALS row scoped to a PASSED gate fails, except GATE-ACCEPT (the accepted-deviations gate,
 #    whose signed deviations stay dispositioned-but-OPEN by design) ─────────────────────────────────────────────
+
+# ── Fixture 4: v2-positional-status — the two DEFERRALS status parsers agree ──
+# (HYGIENE.1/REQ-MEM-3: check-build-memory.sh now takes the FIRST canonical token in the
+# last cell — positional semantics identical to check-backlog.sh. The fixture's kind-P rows
+# surface each script's owed-set through observable output: this script's rule-5 warnings vs
+# check-backlog's "missing" issues. D-T9-1/-5/-7 (DONE/WONTFIX/ACCEPTED-SKELETON-led cells
+# carrying OPEN/DONE prose or a passed-gate citation) must be silent under both.)
+test_positional_status() {
+  local W; W="$(tmp)/repo"; cp -R "$HERE/v2-positional-status" "$W"; gitify "$W"
+  local ok=1 out rc warned missing
+  out="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] || { fail "positional: check-build-memory exit=$rc (want 0 — warnings only)"; ok=0; }
+  warned="$(printf '%s\n' "$out" | sed -n 's/^.*DEFERRALS row \(D-[A-Za-z0-9.-]*\) (kind P, still owed).*/\1/p' | sort | tr '\n' ' ')"
+  [ "$warned" = "D-T9-2 D-T9-3 D-T9-8 D-T9-9 " ] \
+    || { fail "positional: kind-P owed set = '$warned' (want 'D-T9-2 D-T9-3 D-T9-8 D-T9-9 ')"; ok=0; }
+  printf '%s' "$out" | grep -qF "references GATE-G1" \
+    && { fail "positional: DONE-led D-T9-7 citing PASSED GATE-G1 was flagged as OPEN"; ok=0; }
+  printf '%s' "$out" | grep -qF "orphan) status" \
+    && { fail "positional: an orphan-status violation fired"; ok=0; }
+  # the sibling parser (reconcile-build/check-backlog.sh) must read the same owed set
+  local BLOG="$SCRIPTS/../../reconcile-build/scripts/check-backlog.sh"
+  if [ -f "$BLOG" ]; then
+    out="$(bash "$BLOG" "$W/docs/build/BACKLOG.csv" "$W/docs/build" "$W/docs/tickets" 2>&1)"; rc=$?
+    [ "$rc" -eq 1 ] || { fail "positional: check-backlog exit=$rc (want 1 — unhomed fixture rows)"; ok=0; }
+    missing="$(printf '%s\n' "$out" | sed -n 's/^.*missing: \(D-[A-Za-z0-9.-]*\) is owed.*/\1/p' | sort | tr '\n' ' ')"
+    [ "$missing" = "D-T9-2 D-T9-3 D-T9-8 D-T9-9 " ] \
+      || { fail "positional: check-backlog owed set = '$missing' (want 'D-T9-2 D-T9-3 D-T9-8 D-T9-9 ')"; ok=0; }
+  else
+    fail "positional: check-backlog.sh not found at $BLOG"; ok=0
+  fi
+  [ "$ok" = 1 ] && say "PASS v2-positional-status"
+}
+
 test_passed_gate_deferrals() {
   local ok=1 W out rc
   # a phase gate keeps the check: PASSED GATE-G1 + an OPEN row naming it is a violation
@@ -624,6 +657,7 @@ test_planning
 test_history
 test_reqcov
 test_passed_gate_deferrals
+test_positional_status
 
 if [ "$FAIL" -eq 0 ]; then
   say "ALL PASS"

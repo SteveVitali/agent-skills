@@ -533,16 +533,14 @@ if [ -f "$DEF" ]; then
   # table rows whose first cell is an id like D-<TICKET>-<n>
   grep -E '^\|[[:space:]]*D-' "$DEF" | while IFS= read -r row; do
     id="$(printf '%s' "$row" | sed -E 's/^\|[[:space:]]*//; s/[[:space:]]*\|.*$//')"
-    # The status is the first canonical token appearing (as a whole word) in the last cell,
-    # tolerating markdown emphasis and status prose (e.g. "**PARTIAL (date):** …" or a migrated
-    # cell like "…DONE…; OPEN for a live fixture"). Hyphens are kept so compound words like
-    # ROOT-CAUSED don't spuriously match a canonical token.
+    # The status is the FIRST canonical token in token order in the last cell — positional
+    # semantics, identical to check-backlog.sh's `first T[i] ~ /^(OPEN|…)$/` pick (aligned by
+    # HYGIENE.1/REQ-MEM-3: the pre-fix priority scan read any "OPEN" word anywhere as owed even
+    # when a dated DONE led the cell). Hyphens are kept so compound words like DONE-code or
+    # ROOT-CAUSED never match a canonical token.
     lastcell="$(printf '%s' "$row" | sed -E 's/[[:space:]]*\|[[:space:]]*$//' | awk -F'|' '{print $NF}' | tr 'a-z' 'A-Z')"
     toks=" $(printf '%s' "$lastcell" | sed -E 's/[^A-Z-]+/ /g') "
-    status=""
-    for cand in OPEN PARTIAL DONE WONTFIX ACCEPTED-SKELETON; do
-      case "$toks" in *" $cand "*) status="$cand"; break ;; esac
-    done
+    status="$(printf '%s' "$toks" | awk '{ for (i = 1; i <= NF; i++) if ($i == "OPEN" || $i == "PARTIAL" || $i == "DONE" || $i == "WONTFIX" || $i == "ACCEPTED-SKELETON") { print $i; exit } }')"
     printf '%s\n' "$id" >> "$DEF_IDS"
     if [ -z "$status" ]; then
       shown="$(printf '%s' "$lastcell" | sed -E 's/^[^A-Za-z]*//; s/[^A-Za-z-].*$//')"
@@ -568,8 +566,9 @@ if [ -f "$DEF" ]; then
     /^\|[[:space:]]*D-/ && kc {
       k = $kc; gsub(/[[:space:]*`_]/, "", k); if (k != "P") next
       last = ""; for (i = NF; i >= 1; i--) if (trim($i) != "") { last = $i; break }
-      s = toupper(last); gsub(/[^A-Z-]+/, " ", s); s = " " s " "
-      if (!index(s, " OPEN ") && !index(s, " PARTIAL ")) next
+      s = toupper(last); gsub(/[^A-Z-]+/, " ", s); n = split(s, T, " "); st = ""
+      for (i = 1; i <= n; i++) if (T[i] ~ /^(OPEN|PARTIAL|DONE|WONTFIX|ACCEPTED-SKELETON)$/) { st = T[i]; break }
+      if (st != "OPEN" && st != "PARTIAL") next   # positional status — dated-tail OPEN prose never re-owes (HYGIENE.1)
       cell = uc ? $uc : $0
       if (cell !~ /owner:/ || cell !~ /trigger:/) print trim($2)
     }' "$DEF" 2>/dev/null | while IFS= read -r pid; do
@@ -595,7 +594,13 @@ if [ -f "$DEF" ]; then
         # design. Phase gates (GATE-G1, GATE-G2, …) keep the check: an OPEN row scoped
         # to a passed phase is a real violation.
         if [ "$g" != "GATE-ACCEPT" ]; then
-          if grep -E '^\|[[:space:]]*D-' "$DEF" | grep -iE '\bOPEN\b' | grep -qF "$g"; then
+          # Positional status only — a DONE-led row whose dated tail mentions "OPEN" or the
+          # gate id is discharged history, not an open row scoped to the passed gate
+          # (HYGIENE.1 alignment).
+          if grep -E '^\|[[:space:]]*D-' "$DEF" | grep -F "$g" | awk -F'|' '
+            { last = ""; for (i = NF; i >= 1; i--) { c = $i; gsub(/[[:space:]]/, "", c); if (c != "") { last = $i; break } }
+              s = toupper(last); gsub(/[^A-Z-]+/, " ", s); n = split(s, T, " ")
+              for (i = 1; i <= n; i++) if (T[i] ~ /^(OPEN|PARTIAL|DONE|WONTFIX|ACCEPTED-SKELETON)$/) { if (T[i] == "OPEN") print "hit"; break } }' | grep -q .; then
             viol deferrals "an OPEN DEFERRALS row references $g whose readout says PASSED" "docs/tickets/DEFERRALS.md" "" "$g"
           fi
         fi
