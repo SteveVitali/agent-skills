@@ -31,6 +31,9 @@
 #                 prompt as a TRAILING POSITIONAL argument. With --agent-cmd you own the autonomy posture; --yolo
 #                 is ignored.
 #   --worktree    Directory to run each invocation in. Default: the ledger's buildWorktree.
+#                 A committed ledger outside <toplevel>/docs/build (a monorepo subproject) exports
+#                 BUILD_MEMORY_ROOT=<its toplevel-relative dir> to every unit and names it in the prompt
+#                 (BM-ROOT-03); a BUILD_MEMORY_ROOT already in the environment is kept.
 #   --log-dir     Where per-unit agent output is captured. Default: <ledger-dir>/drive-build-logs/.
 #   --max-iters   Safety cap on iterations (default 100). Re-run to continue past it.
 #   --ci-gate     (default with --skill orchestrate-build) Before every dispatch — and before reporting
@@ -88,6 +91,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DRIVER_SKILL="$SKILLS_ROOT/$SKILL_NAME/SKILL.md"
 [ -f "$DRIVER_SKILL" ] || echo "drive-build.sh: warning: $SKILL_NAME SKILL not found at $DRIVER_SKILL" >&2
+
+# The memory root (BM-ROOT-03). A committed-mode ledger outside <toplevel>/docs/build (a monorepo subproject's
+# sub/proj/docs/build) is exported as BUILD_MEMORY_ROOT (toplevel-relative, so each worktree resolves its own copy)
+# to every unit, and the prompt names it; an operator-set BUILD_MEMORY_ROOT is kept. The default layout is unchanged.
+MEM_REL="" ; MEM_PROMPT=""
+if grep -qF '<!-- build-memory: v2 -->' "$(dirname "$LEDGER")/README.md" 2>/dev/null; then
+  _ld="$(cd "$(dirname "$LEDGER")" && pwd -P)"; _lt="$(git -C "$_ld" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$_lt" ]; then case "$_ld" in "$_lt"/*) MEM_REL="${_ld#"$_lt"/}" ;; esac; fi
+  if [ "$MEM_REL" = "docs/build" ]; then MEM_REL=""; fi
+fi
+if [ -n "${BUILD_MEMORY_ROOT:-}" ]; then MEM_REL="$BUILD_MEMORY_ROOT"; elif [ -n "$MEM_REL" ]; then export BUILD_MEMORY_ROOT="$MEM_REL"; fi
+if [ -n "$MEM_REL" ]; then
+  export BUILD_MEMORY_ROOT
+  MEM_PROMPT=" The build memory root is '$MEM_REL' (BUILD_MEMORY_ROOT=$MEM_REL is exported to you; a relative value \
+resolves against the worktree toplevel): every docs/build, docs/tickets and docs/adr path in the skills means \
+<memory root>, <memory root>/../tickets and <memory root>/../adr, so the validator runs as \
+\`BUILD_MEMORY_ROOT=$MEM_REL check-build-memory.sh .\` and the closeout \`git add\` names paths under it."
+fi
 
 # Never-fail ledger reader: prints the value or empty; tolerates leading whitespace + trailing inline comments.
 # (Must not fail under `set -e`: a missing key is normal, not an error.)
@@ -160,6 +181,7 @@ elif [ "$CI_GATE" -eq 1 ]; then CI_NOTE="on"
 else CI_NOTE="OFF (explicit opt-out --no-ci-gate)"; fi
 LEDGER_HARNESS="$(status_val harness)"
 echo "drive-build: ledger=$LEDGER harness(ledger)=${LEDGER_HARNESS:-<not recorded>}"
+if [ -n "$MEM_REL" ]; then echo "drive-build: memory root=$MEM_REL (BUILD_MEMORY_ROOT, exported to every unit)"; fi
 echo "drive-build: agent=[${BASE_ARGV[*]}] yolo=$YOLO worktree=${WORKTREE:-<none>} logs=$LOG_DIR max-iters=$MAX_ITERS ci-gate=$CI_NOTE"
 
 # CI gate (BM-CI-01): the loop itself refuses to dispatch past a red, pending or unreadable PR.
@@ -227,7 +249,7 @@ run-ledger header. The ledger's CURRENT STATE \`harness:\` reads '${LEDGER_HARNE
 a different harness or model than yours, you are a harness switch (BM-HARNESS-01) — allowed only at this boundary \
 and only on the operator's words: record a PHASE LOG \`harness-switch\` entry quoting them, or stop and ask. \
 Before you stop on a block, a gate or a usage-limit event, or after the last row under a chain-table banner, \
-write the operator digest (orchestrate-build §4, scripts/digest.sh)."
+write the operator digest (orchestrate-build §4, scripts/digest.sh).$MEM_PROMPT"
 
   if [ "$PRINT_PROMPT" -eq 1 ]; then
     echo "drive-build: checks passed — start ONE fresh session (any harness) with this prompt, then re-run --print-prompt:"

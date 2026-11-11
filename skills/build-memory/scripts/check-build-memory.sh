@@ -110,10 +110,11 @@
 
 set -o pipefail
 
-REPO="" ; JSON="" ; NOW_ARG="" ; PLANNING="" ; HIST=0
+REPO="" ; JSON="" ; NOW_ARG="" ; PLANNING="" ; HIST=0 ; MEMROOT=""
 HIST_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
+    --memory-root) MEMROOT="${2:-}"; shift 2 ;;
     --json)      JSON="${2:-}"; shift 2 ;;
     --json=*)    JSON="${1#--json=}"; shift ;;
     --now)       NOW_ARG="${2:-}"; shift 2 ;;
@@ -126,14 +127,32 @@ while [ $# -gt 0 ]; do
     *)  if [ -z "$REPO" ]; then REPO="$1"; else echo "check-build-memory: unexpected argument '$1'" >&2; exit 2; fi; shift ;;
   esac
 done
-REPO="${REPO:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
-REPO="$(cd "$REPO" 2>/dev/null && pwd || printf '%s' "$REPO")"
 MARKER='<!-- build-memory: v2 -->'
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bm-paths.sh
+. "$SELF_DIR/bm-paths.sh"
+# The memory root and the project dir that holds it (BM-ROOT-03): --memory-root, else an explicit repo_root
+# that has docs/build, else $BUILD_MEMORY_ROOT, else <repo_root | toplevel | cwd>/docs/build (the 0.5.3 rule).
+# REPO is the project dir: every repo-relative label below (docs/build/…) is relative to it.
+REPO_ARG="$REPO"
+if [ -z "$PLANNING" ]; then
+  bm_resolve "$REPO_ARG" "$MEMROOT" || { echo "check-build-memory: $BM_ERR" >&2; exit 2; }
+else
+  # Planning mode needs no build memory: an unset or not-yet-created root only locates the docs dir.
+  if bm_resolve "$REPO_ARG" "$MEMROOT"; then :; else
+    if [ -n "${BUILD_MEMORY_ROOT:-}" ] && [ -z "$MEMROOT" ]; then
+      bm_set_paths "$(bm_resolve_against "$BUILD_MEMORY_ROOT" "${REPO_ARG:-.}")" "${REPO_ARG:-.}" || { echo "check-build-memory: $BM_ERR" >&2; exit 2; }
+    else echo "check-build-memory: $BM_ERR" >&2; exit 2; fi
+  fi
+fi
+REPO="$BM_PROJECT"
+BREL="$BM_BREL" ; TREL="$BM_TREL" ; AREL="$BM_AREL"
+TOP="$(bm_toplevel "$REPO")"
 
 # History mode is a separate script (BM-HIST-01); it has its own report and exit codes.
 if [ "$HIST" -eq 1 ]; then
   set -- --repo "$REPO" "${HIST_ARGS[@]}"
+  [ "$BM_SOURCE" = default ] || [ "$BM_SOURCE" = arg ] || set -- "$@" --memory-root "$BM_BUILD"
   [ -n "$JSON" ] && set -- "$@" --json "$JSON"
   [ -n "$NOW_ARG" ] && set -- "$@" --now "$NOW_ARG"
   exec bash "$SELF_DIR/check-history.sh" "$@"
@@ -213,12 +232,12 @@ write_report() {   # write_report <exit> <buildMemory true|false> [guards]
   local ex="$1" bm="$2" nv nw commit dirty digest inset
   nv="$(wc -l < "$VIOL" | tr -d ' ')"; nw="$(wc -l < "$WARN" | tr -d ' ')"
   commit="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)"; dirty=false
-  if [ -n "$commit" ] && [ -n "$(git -C "$REPO" status --porcelain -- docs/build docs/tickets docs/adr ${PLANNING:+"$PLANNING"} 2>/dev/null)" ]; then dirty=true; fi
+  if [ -n "$commit" ] && [ -n "$(git -C "$REPO" status --porcelain -- "$BREL" "$TREL" "$AREL" ${PLANNING:+"${PLAN_FILE:-$PLANNING}"} 2>/dev/null)" ]; then dirty=true; fi
   inset="$(newtmp)"
   {
-    [ -d "$REPO/docs/build" ] && find "$REPO/docs/build" -type f ! -path '*/logs/*' 2>/dev/null
-    [ -d "$REPO/docs/tickets" ] && find "$REPO/docs/tickets" -type f -name '*.md' 2>/dev/null
-    [ -d "$REPO/docs/adr" ] && find "$REPO/docs/adr" -type f -name '*.md' 2>/dev/null
+    [ -d "$BM_BUILD" ] && find "$BM_BUILD" -type f ! -path '*/logs/*' 2>/dev/null
+    [ -d "$BM_TICKETS" ] && find "$BM_TICKETS" -type f -name '*.md' 2>/dev/null
+    [ -d "$BM_ADR" ] && find "$BM_ADR" -type f -name '*.md' 2>/dev/null
     [ -n "${SPEC:-}" ] && [ -f "$SPEC" ] && printf '%s\n' "$SPEC"
     [ -n "${PLAN_FILE:-}" ] && [ -f "$PLAN_FILE" ] && printf '%s\n' "$PLAN_FILE"
     true
@@ -264,7 +283,7 @@ human() {   # print the summary + the report path, then exit with $1
 
 # ── Planning-ledger freshness (V14; BM-SYNTH-02) — no build-memory marker needed ──
 if [ -n "$PLANNING" ]; then
-  case "$PLANNING" in /*) PLAN_FILE="$PLANNING" ;; *) PLAN_FILE="$REPO/$PLANNING" ;; esac
+  PLAN_FILE="$(bm_find_rel "$PLANNING")"
   echo "check-build-memory --planning: $PLAN_FILE"
   if [ ! -f "$PLAN_FILE" ]; then
     viol planning "no planning ledger at $PLANNING" "$PLANNING"; write_report 2 false; human 2
@@ -331,13 +350,17 @@ if [ -n "$PLANNING" ]; then
   write_report "$ex" false; human "$ex"
 fi
 
-BUILD="$REPO/docs/build"
-TICKETS="$REPO/docs/tickets"
-ADR="$REPO/docs/adr"
+BUILD="$BM_BUILD"
+TICKETS="$BM_TICKETS"
+ADR="$BM_ADR"
 
 # Not a build-memory repo → exit 2 (the two freshness detectors' "nothing to do" convention).
 if [ ! -f "$BUILD/README.md" ] || ! grep -qF "$MARKER" "$BUILD/README.md" 2>/dev/null; then
-  echo "check-build-memory: $REPO is not a build-memory repo (no docs/build/README.md marker '$MARKER')."
+  echo "check-build-memory: $REPO is not a build-memory repo (no $BREL/README.md marker '$MARKER')."
+  if [ "$BM_SOURCE" = default ]; then
+    nested="$(bm_nested_roots "$REPO")"
+    [ -n "$nested" ] && printf 'check-build-memory: hint: committed build memory lives in a subdir — set BUILD_MEMORY_ROOT=<root> (relative to the worktree toplevel) or pass --memory-root:\n%s\n' "$(printf '%s\n' "$nested" | sed 's/^/    /')" >&2
+  fi
   write_report 2 false
   echo "  JSON: $JSON"
   exit 2
@@ -354,7 +377,7 @@ guarded() { if [ "$GUARDS" -eq 1 ]; then viol "$@"; else warn "$@"; fi; }
 IN_GIT=0; git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 && IN_GIT=1
 MARKER_C=""; MARKER_STATE=none; ADDS=""; BEFORE=""
 if [ "$GUARDS" -eq 1 ] && [ "$IN_GIT" -eq 1 ]; then
-  MARKER_C="$(git -C "$REPO" log --format=%H -S'build-memory-guards: 1' -- docs/build/README.md 2>/dev/null | tail -1)"
+  MARKER_C="$(git -C "$REPO" log --format=%H -S'build-memory-guards: 1' -- "$BREL/README.md" 2>/dev/null | tail -1)"
   if [ -n "$MARKER_C" ]; then
     MARKER_STATE=committed
     BEFORE="$(newtmp)"; git -C "$REPO" rev-list "$MARKER_C" 2>/dev/null | grep -vxF "$MARKER_C" > "$BEFORE"
@@ -362,7 +385,7 @@ if [ "$GUARDS" -eq 1 ] && [ "$IN_GIT" -eq 1 ]; then
     MARKER_STATE=uncommitted
   fi
   ADDS="$(newtmp)"
-  git -C "$REPO" log --reverse --diff-filter=A --name-only --format='@%H' -- docs/build/runs docs/build/readouts docs/adr 2>/dev/null \
+  git -C "$REPO" log --reverse --diff-filter=A --name-only --relative --format='@%H' -- "$BREL/runs" "$BREL/readouts" "$AREL" 2>/dev/null \
     | awk '/^@/ {c = substr($0, 2); next} NF && !($0 in s) {s[$0] = c; print $0 "\t" c}' > "$ADDS"
 fi
 created_after_marker() {   # <path relative to REPO> → 0 when new under the guards marker
@@ -387,22 +410,22 @@ lval() {
     | sed -E "s/^[[:space:]]*${1}:[[:space:]]*//; s/[[:space:]]*#.*$//; s/[[:space:]]*$//"
 }
 
-MANIFEST_REL="$(lval manifest)"; [ -n "$MANIFEST_REL" ] || MANIFEST_REL="docs/tickets/00_MANIFEST.md"
-case "$MANIFEST_REL" in /*) MANIFEST="$MANIFEST_REL" ;; *) MANIFEST="$REPO/$MANIFEST_REL" ;; esac
+MANIFEST_REL="$(lval manifest)"; [ -n "$MANIFEST_REL" ] || MANIFEST_REL="$TREL/00_MANIFEST.md"
+MANIFEST="$(bm_find_rel "$MANIFEST_REL")"
 
 # ── 1. Layout: allowlist at the root of docs/build/ ──────────────────────────
 ALLOWED=" README.md LEDGER.md BUILD_INDEX.md runs pr readouts planning reports tools fixtures logs COVERAGE_MATRIX.csv CAPSTONE_GAP_ANALYSIS.md COMPOSED_E2E_REPORT.md CAPSTONE_CLOSURE.md BACKLOG.csv BACKLOG.md TICKET_VS_SPEC.md SPEC_RECONCILIATION_PLAN.md INTEGRATION_PLAN.md OPERATIONAL_READINESS.md "
 for entry in "$BUILD"/* "$BUILD"/.[!.]*; do
   [ -e "$entry" ] || continue
   b="$(basename "$entry")"
-  case "$ALLOWED" in *" $b "*) : ;; *) viol layout "docs/build/$b is not an allowed build-memory root entry" "docs/build/$b" ;; esac
+  case "$ALLOWED" in *" $b "*) : ;; *) viol layout "$BREL/$b is not an allowed build-memory root entry" "$BREL/$b" ;; esac
 done
 # logs/.gitignore present with the right contents (BM-LAYOUT-03).
 if [ ! -f "$BUILD/logs/.gitignore" ]; then
-  viol layout "docs/build/logs/.gitignore is missing (must contain '*' and '!.gitignore')" "docs/build/logs/.gitignore"
+  viol layout "$BREL/logs/.gitignore is missing (must contain '*' and '!.gitignore')" "$BREL/logs/.gitignore"
 else
-  grep -qE '^\*$' "$BUILD/logs/.gitignore" || warn layout "docs/build/logs/.gitignore should contain a bare '*'" "docs/build/logs/.gitignore"
-  grep -qE '^!\.gitignore$' "$BUILD/logs/.gitignore" || warn layout "docs/build/logs/.gitignore should contain '!.gitignore'" "docs/build/logs/.gitignore"
+  grep -qE '^\*$' "$BUILD/logs/.gitignore" || warn layout "$BREL/logs/.gitignore should contain a bare '*'" "$BREL/logs/.gitignore"
+  grep -qE '^!\.gitignore$' "$BUILD/logs/.gitignore" || warn layout "$BREL/logs/.gitignore should contain '!.gitignore'" "$BREL/logs/.gitignore"
 fi
 
 # ── Parse the manifest chain table + companions ──────────────────────────────
@@ -452,7 +475,7 @@ if [ -d "$TICKETS" ]; then
       # 16_P0.15b, 16_P0.15c). The real invariant is a unique ID, not a unique NN prefix.
       printf '%s\t%s\n' "$id" "$b" >> "$SEQ_KEYS"
       printf '%s\t%s\t%s\n' "$id" "$num" "$b" >> "$ID_SEQ"
-      in_chain "$b" || viol manifest "ticket file $b has no row in the manifest chain table" "docs/tickets/$b" "$id"
+      in_chain "$b" || viol manifest "ticket file $b has no row in the manifest chain table" "$TREL/$b" "$id"
     else
       # Legacy filename allowed only if the chain table lists it.
       if in_chain "$b"; then
@@ -461,14 +484,14 @@ if [ -d "$TICKETS" ]; then
         case "$num" in ''|*[!0-9]*) num=0 ;; esac
         printf '%s\t%s\t%s\n' "$id" "$num" "$b" >> "$ID_SEQ"
       else
-        viol filename "ticket file $b does not match the filename grammar and is not a listed chain row" "docs/tickets/$b"
+        viol filename "ticket file $b does not match the filename grammar and is not a listed chain row" "$TREL/$b"
       fi
     fi
   done
   # duplicate ticket ids (the sequence invariant: no two ticket files declare the same id)
   if [ -s "$SEQ_KEYS" ]; then
     cut -f1 "$SEQ_KEYS" | sort | uniq -d | while IFS= read -r dup; do
-      [ -n "$dup" ] && viol sequence "duplicate ticket id '$dup' (two ticket files declare the same id)" "docs/tickets" "$dup"
+      [ -n "$dup" ] && viol sequence "duplicate ticket id '$dup' (two ticket files declare the same id)" "$TREL" "$dup"
     done
   fi
 fi
@@ -480,7 +503,7 @@ if [ -s "$CHAIN_FILES" ]; then
     [ "$cf" = "00_MANIFEST.md" ] && continue
     if [ ! -f "$TICKETS/$cf" ]; then
       # could be a docs/build companion (rare); only flag if truly absent
-      [ -f "$REPO/$cf" ] || viol manifest "manifest chain row names $cf but no such file exists in docs/tickets/" "$MANIFEST_REL" "" "$cf"
+      [ -f "$REPO/$cf" ] || viol manifest "manifest chain row names $cf but no such file exists in $TREL/" "$MANIFEST_REL" "" "$cf"
     fi
   done < "$CHAIN_FILES"
 fi
@@ -506,7 +529,7 @@ if [ -d "$TICKETS" ]; then
     # skeleton check (robust to markdown bold/table cells around Kind: and Run:)
     if grep -qiE 'Kind:[^|]*skeleton' "$f"; then
       if grep -E 'Run:' "$f" | grep -q 'implement-spec'; then
-        viol skeleton "skeleton ticket $b carries a Run: line (a skeleton must have no run line)" "docs/tickets/$b"
+        viol skeleton "skeleton ticket $b carries a Run: line (a skeleton must have no run line)" "$TREL/$b"
       fi
     fi
     # depends-on backward check
@@ -519,7 +542,7 @@ if [ -d "$TICKETS" ]; then
         [ -n "$dep_num" ] || continue
         [ -n "$my_num" ] || continue
         if [ "$dep_num" -gt "$my_num" ] 2>/dev/null; then
-          viol depends "ticket $b depends on $dep which lands later (forward dependency)" "docs/tickets/$b" "" "$dep"
+          viol depends "ticket $b depends on $dep which lands later (forward dependency)" "$TREL/$b" "" "$dep"
         fi
       done
     ;; esac
@@ -544,12 +567,12 @@ if [ -f "$DEF" ]; then
     printf '%s\n' "$id" >> "$DEF_IDS"
     if [ -z "$status" ]; then
       shown="$(printf '%s' "$lastcell" | sed -E 's/^[^A-Za-z]*//; s/[^A-Za-z-].*$//')"
-      viol deferrals "DEFERRALS row $id has an invalid (orphan) status '$shown'" "docs/tickets/DEFERRALS.md" "$id"
+      viol deferrals "DEFERRALS row $id has an invalid (orphan) status '$shown'" "$TREL/DEFERRALS.md" "$id"
     fi
   done
   if [ -s "$DEF_IDS" ]; then
     sort "$DEF_IDS" | uniq -d | while IFS= read -r dup; do
-      [ -n "$dup" ] && viol deferrals "duplicate DEFERRALS id '$dup'" "docs/tickets/DEFERRALS.md" "$dup"
+      [ -n "$dup" ] && viol deferrals "duplicate DEFERRALS id '$dup'" "$TREL/DEFERRALS.md" "$dup"
     done
   fi
   # P (human-prerequisite) rows still owed must be scheduled: owner: + trigger: in
@@ -572,7 +595,7 @@ if [ -f "$DEF" ]; then
       cell = uc ? $uc : $0
       if (cell !~ /owner:/ || cell !~ /trigger:/) print trim($2)
     }' "$DEF" 2>/dev/null | while IFS= read -r pid; do
-    [ -n "$pid" ] && warn deferrals "DEFERRALS row $pid (kind P, still owed) has no owner:/trigger: in 'unblocked by' (rule 5: human work is scheduled)" "docs/tickets/DEFERRALS.md" "$pid"
+    [ -n "$pid" ] && warn deferrals "DEFERRALS row $pid (kind P, still owed) has no owner:/trigger: in 'unblocked by' (rule 5: human work is scheduled)" "$TREL/DEFERRALS.md" "$pid"
   done
   # no OPEN row scoped to a gate whose readout says PASSED. A readout with a `Status:` line
   # (templates/READOUT.md) is judged by that line alone, comments stripped; older readouts
@@ -601,7 +624,7 @@ if [ -f "$DEF" ]; then
             { last = ""; for (i = NF; i >= 1; i--) { c = $i; gsub(/[[:space:]]/, "", c); if (c != "") { last = $i; break } }
               s = toupper(last); gsub(/[^A-Z-]+/, " ", s); n = split(s, T, " ")
               for (i = 1; i <= n; i++) if (T[i] ~ /^(OPEN|PARTIAL|DONE|WONTFIX|ACCEPTED-SKELETON)$/) { if (T[i] == "OPEN") print "hit"; break } }' | grep -q .; then
-            viol deferrals "an OPEN DEFERRALS row references $g whose readout says PASSED" "docs/tickets/DEFERRALS.md" "" "$g"
+            viol deferrals "an OPEN DEFERRALS row references $g whose readout says PASSED" "$TREL/DEFERRALS.md" "" "$g"
           fi
         fi
       fi
@@ -613,7 +636,7 @@ fi
 if [ -d "$ADR" ]; then
   for a in "$ADR"/ADR-*.md; do
     [ -f "$a" ] || continue
-    grep -qE '^##[[:space:]]+Revisit trigger' "$a" || viol adr "$(basename "$a") has no '## Revisit trigger' section" "docs/adr/$(basename "$a")"
+    grep -qE '^##[[:space:]]+Revisit trigger' "$a" || viol adr "$(basename "$a") has no '## Revisit trigger' section" "$AREL/$(basename "$a")"
   done
   if [ -f "$ADR/README.md" ] && [ -f "$SELF_DIR/adr-index.sh" ]; then
     gen="$(newtmp)"
@@ -622,9 +645,9 @@ if [ -d "$ADR" ]; then
       leg="$(newtmp)"
       bash "$SELF_DIR/adr-index.sh" --check --legacy "$ADR" > "$leg" 2>/dev/null
       if diff -q "$leg" "$ADR/README.md" >/dev/null 2>&1; then
-        warn adr "docs/adr/README.md was generated by the pre-0.5.0 parser (titles '# ADR-NNN —', Phase/plain fields read '—'); regenerate it with adr-index.sh (BM-ADR-02)" "docs/adr/README.md"
+        warn adr "$AREL/README.md was generated by the pre-0.5.0 parser (titles '# ADR-NNN —', Phase/plain fields read '—'); regenerate it with adr-index.sh (BM-ADR-02)" "$AREL/README.md"
       else
-        viol adr "docs/adr/README.md does not match a fresh adr-index regeneration (hand-edited or stale)" "docs/adr/README.md"
+        viol adr "$AREL/README.md does not match a fresh adr-index regeneration (hand-edited or stale)" "$AREL/README.md"
       fi
     fi
     # Every cell the generator could not parse reads `—` (SK-21): warn; fail for an ADR added after
@@ -634,25 +657,25 @@ if [ -d "$ADR" ]; then
     if [ -n "$dash" ]; then
       while IFS= read -r af; do
         [ -n "$af" ] || continue
-        if created_after_marker "docs/adr/$af"; then
-          viol adr "$af: an ADR index cell reads '—' (title/ticket/status not parseable; BM-ADR-01 header form)" "docs/adr/$af"
+        if created_after_marker "$AREL/$af"; then
+          viol adr "$af: an ADR index cell reads '—' (title/ticket/status not parseable; BM-ADR-01 header form)" "$AREL/$af"
         else nd=$((nd + 1)); [ -n "$first" ] || first="$af"; fi
       done <<EOF
 $dash
 EOF
-      [ "$nd" -gt 0 ] && warn adr "$nd ADR index row(s) have a cell reading '—' (first: $first) — the header has no parseable title/Ticket/Phase/Status (BM-ADR-01)" "docs/adr/README.md"
+      [ "$nd" -gt 0 ] && warn adr "$nd ADR index row(s) have a cell reading '—' (first: $first) — the header has no parseable title/Ticket/Phase/Status (BM-ADR-01)" "$AREL/README.md"
     fi
   fi
 fi
 # spec ADR appendix == file set (BM-ADR-04, when resolvable)
 SPEC_REL="$(lval canonicalSpec)"
 if [ -n "$SPEC_REL" ]; then
-  case "$SPEC_REL" in /*) SPEC="$SPEC_REL" ;; *) SPEC="$REPO/$SPEC_REL" ;; esac
+  SPEC="$(bm_find_rel "$SPEC_REL")"
   if [ -f "$SPEC" ] && grep -qiE 'ADR (appendix|index)|Appendix [A-Z][^\n]*ADR' "$SPEC"; then
     spec_adrs="$(grep -oE 'ADR-[0-9]{3}' "$SPEC" | sort -u)"
     file_adrs="$(ls "$ADR" 2>/dev/null | grep -oE '^ADR-[0-9]{3}' | sort -u)"
     if [ -n "$spec_adrs" ] && [ "$spec_adrs" != "$file_adrs" ]; then
-      warn adr "spec ADR appendix and docs/adr/ file set differ (BM-ADR-04)" "$SPEC_REL"
+      warn adr "spec ADR appendix and $AREL/ file set differ (BM-ADR-04)" "$SPEC_REL"
     fi
   fi
 fi
@@ -715,14 +738,14 @@ if [ -f "$LEDGER" ]; then
   ' "$LEDGER" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
   exp="$(printf '%s' "$EXPECTED_KEYS" | sed -E 's/[[:space:]]+/ /g')"
   if [ "$got" != "$exp" ] && [ "$got" != "$EXPECTED_KEYS_H" ]; then
-    viol ledger "LEDGER.md CURRENT STATE keys are missing or out of order (expected: $exp; optional 'harness' only between round and updatedAt)" "docs/build/LEDGER.md"
+    viol ledger "LEDGER.md CURRENT STATE keys are missing or out of order (expected: $exp; optional 'harness' only between round and updatedAt)" "$BREL/LEDGER.md"
   fi
   # CURRENT STATE values (BM-LEDGER-02 vocabularies; guarded). The first token is judged, so a
   # trailing comment still works; an uninstantiated seed placeholder (`<…>` / `(…)`) is skipped.
   vcheck() {   # vcheck <key> <ERE for the first token> <expected text>
     local v t; v="$(lval "$1")"; t="$(printf '%s' "$v" | awk '{print $1}')"
     case "$t" in ''|'<'*|'('*) return 0 ;; esac
-    printf '%s' "$t" | grep -qE "^($2)\$" || guarded ledger-value "LEDGER.md CURRENT STATE $1 '$t' is not $3 (BM-LEDGER-02)" "docs/build/LEDGER.md" "$1"
+    printf '%s' "$t" | grep -qE "^($2)\$" || guarded ledger-value "LEDGER.md CURRENT STATE $1 '$t' is not $3 (BM-LEDGER-02)" "$BREL/LEDGER.md" "$1"
   }
   vcheck projectStatus 'NOT_STARTED|IN_PROGRESS|BLOCKED|PAUSED|DONE' 'one of NOT_STARTED | IN_PROGRESS | BLOCKED | PAUSED | DONE'
   vcheck pauseRequested 'true|false' 'true | false'
@@ -736,7 +759,7 @@ if [ -f "$LEDGER" ]; then
     # must name a chain row — by exact id (ID_SEQ) or as the _<ID>__ segment of a chain filename.
     nt_re="$(printf '%s' "$nt" | sed 's/[.[\*^$]/\\&/g')"
     if [ -s "$ID_SEQ" ] && ! grep -qE "^${nt_re}$(printf '\t')" "$ID_SEQ" && ! grep -qE "_${nt_re}__" "$CHAIN_FILES"; then
-      warn ledger "LEDGER nextTicket '$nt' does not name a known chain row or DONE" "docs/build/LEDGER.md" "nextTicket" "$nt"
+      warn ledger "LEDGER nextTicket '$nt' does not name a known chain row or DONE" "$BREL/LEDGER.md" "nextTicket" "$nt"
     fi
   fi
 
@@ -771,17 +794,17 @@ if [ -f "$LEDGER" ]; then
   count phase-log-done "$cand" "$eval_n"
   if [ "$cand" -gt 0 ] && { [ "$eval_n" -eq 0 ] || [ $((eval_n * 2)) -lt "$cand" ]; }; then
     VACUOUS=1
-    viol vacuous "LEDGER.md: $cand PHASE LOG 'done' entr(y/ies) but only $eval_n parse to a ticket id — the done ↔ BUILD_INDEX check would pass vacuously; write entries as '- <date -u +%F> — <ID> done — …' (BM-LEDGER-06)" "docs/build/LEDGER.md"
+    viol vacuous "LEDGER.md: $cand PHASE LOG 'done' entr(y/ies) but only $eval_n parse to a ticket id — the done ↔ BUILD_INDEX check would pass vacuously; write entries as '- <date -u +%F> — <ID> done — …' (BM-LEDGER-06)" "$BREL/LEDGER.md"
   fi
   awk -F'\t' '$6 == 1 && $5 != "" {print $1 "\t" $3 "\t" $4 "\t" $5}' "$PL" | while IFS="$(printf '\t')" read -r ln islast mk tid; do
     case "$tid" in SETUP|CAPSTONE|DONE|ROUND|ROUND[0-9]*) continue ;; esac
     report=viol
     if [ "$mk" = "1" ]; then if [ "$islast" = "1" ]; then report=guarded; else report=warn; fi; fi
     if [ -f "$BI" ] && ! in_index "$tid"; then
-      $report index "PHASE LOG marks $tid done (line $ln) but BUILD_INDEX.md has no row for it" "docs/build/BUILD_INDEX.md" "$tid"
+      $report index "PHASE LOG marks $tid done (line $ln) but BUILD_INDEX.md has no row for it" "$BREL/BUILD_INDEX.md" "$tid"
     fi
     if [ ! -f "$BUILD/runs/$tid.md" ] && [ ! -f "$BUILD/pr/$tid.md" ]; then
-      $report index "PHASE LOG marks $tid done (line $ln) but neither docs/build/runs/$tid.md nor pr/$tid.md exists (no evidence file)" "docs/build/LEDGER.md" "$tid"
+      $report index "PHASE LOG marks $tid done (line $ln) but neither $BREL/runs/$tid.md nor pr/$tid.md exists (no evidence file)" "$BREL/LEDGER.md" "$tid"
     fi
   done
 
@@ -824,7 +847,7 @@ if [ -f "$LEDGER" ]; then
     if [ "$nt" != "$want" ]; then
       hint=""
       case "$want_k" in prose:*) hint=" — row $want says '${want_k#prose:}' outside its gate cell; only a gate-cell token takes a row out of the order" ;; esac
-      warn ledger "LEDGER nextTicket '$nt' is not the lowest chain row that has not landed ('$want'; superseded-by/deferred/unused gate-cell tokens and HUMAN rows skipped)$hint" "docs/build/LEDGER.md" "nextTicket" "$want"
+      warn ledger "LEDGER nextTicket '$nt' is not the lowest chain row that has not landed ('$want'; superseded-by/deferred/unused gate-cell tokens and HUMAN rows skipped)$hint" "$BREL/LEDGER.md" "nextTicket" "$want"
     fi
   fi
 
@@ -834,7 +857,7 @@ if [ -f "$LEDGER" ]; then
   bo="$(lval blockedOn)"
   case "$bo" in ''|'(nothing)'|nothing|none|'(none)') bo_empty=1 ;; *) bo_empty=0 ;; esac
   if [ "${nrep:-0}" -ge 2 ] && [ "$bo_empty" -eq 1 ]; then
-    warn ledger "LEDGER.md: $nrep 'repair — close:' entries in the current PHASE LOG region but blockedOn is empty — a second close repair in a round sets 'blockedOn: worker close protocol broken (<ids>)' (BM-LEDGER-06)" "docs/build/LEDGER.md"
+    warn ledger "LEDGER.md: $nrep 'repair — close:' entries in the current PHASE LOG region but blockedOn is empty — a second close repair in a round sets 'blockedOn: worker close protocol broken (<ids>)' (BM-LEDGER-06)" "$BREL/LEDGER.md"
   fi
 fi
 
@@ -844,12 +867,12 @@ if [ -f "$LEDGER" ]; then
   head_b="$(LC_ALL=C awk '/^##[[:space:]]+OPEN FINDINGS/ {exit} {print}' "$LEDGER" | wc -c | tr -d ' ')"
   case "$head_b" in ''|*[!0-9]*) head_b=0 ;; esac
   if [ "$head_b" -gt 12288 ]; then
-    guarded ledger-budget "LEDGER.md orient region (line 1 → ## OPEN FINDINGS) is $head_b B, over the 12 KiB budget (BM-LEDGER-08)" "docs/build/LEDGER.md"
+    guarded ledger-budget "LEDGER.md orient region (line 1 → ## OPEN FINDINGS) is $head_b B, over the 12 KiB budget (BM-LEDGER-08)" "$BREL/LEDGER.md"
   elif [ "$head_b" -gt 8192 ]; then
-    warn ledger-budget "LEDGER.md orient region is $head_b B, above the 8 KiB warning level (budget 12 KiB, BM-LEDGER-08)" "docs/build/LEDGER.md"
+    warn ledger-budget "LEDGER.md orient region is $head_b B, above the 8 KiB warning level (budget 12 KiB, BM-LEDGER-08)" "$BREL/LEDGER.md"
   fi
   cs_b="$(LC_ALL=C awk '/^##[[:space:]]+CURRENT STATE/ {f=1} f && /^##[[:space:]]/ && !/CURRENT STATE/ {exit} f' "$LEDGER" | wc -c | tr -d ' ')"
-  [ "${cs_b:-0}" -gt 3072 ] 2>/dev/null && guarded ledger-budget "LEDGER.md CURRENT STATE section is $cs_b B, over the 3 KiB budget (values only, BM-LEDGER-08)" "docs/build/LEDGER.md"
+  [ "${cs_b:-0}" -gt 3072 ] 2>/dev/null && guarded ledger-budget "LEDGER.md CURRENT STATE section is $cs_b B, over the 3 KiB budget (values only, BM-LEDGER-08)" "$BREL/LEDGER.md"
   # CURRENT STATE: values only — each key line <= 256 B, no `| PRIOR` history.
   LC_ALL=C awk -v keys=" $EXPECTED_KEYS harness " '
     /^##[[:space:]]+CURRENT STATE/ {inblk=1; next}
@@ -859,14 +882,14 @@ if [ -f "$LEDGER" ]; then
       if (index(keys, " " k " ")) print k "\t" length($0) "\t" ($0 ~ /\|[[:space:]]*\**PRIOR/ ? 1 : 0)
     }' "$LEDGER" | while IFS="$(printf '\t')" read -r k len prior; do
     [ -n "$k" ] || continue
-    [ "$len" -gt 256 ] 2>/dev/null && guarded ledger-budget "LEDGER.md CURRENT STATE '$k' line is $len B (> 256 B; values only, BM-LEDGER-08)" "docs/build/LEDGER.md" "$k"
-    [ "$prior" = "1" ] && guarded ledger-budget "LEDGER.md CURRENT STATE '$k' carries '| PRIOR' history (values only; git + PHASE LOG carry history, BM-LEDGER-08)" "docs/build/LEDGER.md" "$k"
+    [ "$len" -gt 256 ] 2>/dev/null && guarded ledger-budget "LEDGER.md CURRENT STATE '$k' line is $len B (> 256 B; values only, BM-LEDGER-08)" "$BREL/LEDGER.md" "$k"
+    [ "$prior" = "1" ] && guarded ledger-budget "LEDGER.md CURRENT STATE '$k' carries '| PRIOR' history (values only; git + PHASE LOG carry history, BM-LEDGER-08)" "$BREL/LEDGER.md" "$k"
   done
   # returnPass is a comma-separated id list (or "(none)").
   rp="$(lval returnPass)"
   case "$rp" in ''|'(none)'|none|'(nothing)') : ;; *)
     printf '%s' "$rp" | grep -qE "^${ID_RE}([[:space:]]*,[[:space:]]*${ID_RE})*$" \
-      || guarded ledger-budget "LEDGER.md returnPass is not a comma-separated ticket-id list (BM-LEDGER-08)" "docs/build/LEDGER.md" "returnPass" ;;
+      || guarded ledger-budget "LEDGER.md returnPass is not a comma-separated ticket-id list (BM-LEDGER-08)" "$BREL/LEDGER.md" "returnPass" ;;
   esac
   # No line outside CURRENT STATE begins with a CURRENT STATE key name (readers take the first match).
   dupk="$(LC_ALL=C awk -v keys=" $EXPECTED_KEYS harness " '
@@ -878,7 +901,7 @@ if [ -f "$LEDGER" ]; then
     }
     END { if (n) print n "\t" first }' "$LEDGER")"
   if [ -n "$dupk" ]; then
-    guarded ledger-budget "LEDGER.md: $(printf '%s' "$dupk" | cut -f1) line(s) outside CURRENT STATE begin with a CURRENT STATE key name (first: line $(printf '%s' "$dupk" | cut -f2)) (BM-LEDGER-08)" "docs/build/LEDGER.md"
+    guarded ledger-budget "LEDGER.md: $(printf '%s' "$dupk" | cut -f1) line(s) outside CURRENT STATE begin with a CURRENT STATE key name (first: line $(printf '%s' "$dupk" | cut -f2)) (BM-LEDGER-08)" "$BREL/LEDGER.md"
   fi
   # Stale orient text (V3): every repo path named (in backticks) in the orient region, and the
   # manifest / canonicalSpec / memoryRoot values, exist; no stale token appears. Guarded.
@@ -889,10 +912,10 @@ if [ -f "$LEDGER" ]; then
       case "$p" in ''|/*|~*|-*|*'://'*|*'<'*|*'>'*|*'{'*|*'}'*|*'*'*|*'$'*|*'='*|*'…'*) continue ;; esac
       case "$p" in */*) : ;; *) continue ;; esac
       printf '%s' "$p" | grep -qE '(\.[A-Za-z0-9]{1,5}|/)$' || continue
-      [ -e "$REPO/$p" ] || [ -e "$BUILD/$p" ] || printf '%s\n' "$p"
+      [ -e "$REPO/$p" ] || [ -e "$BUILD/$p" ] || { [ -n "$TOP" ] && [ -e "$TOP/$p" ]; } || printf '%s\n' "$p"
     done > "$ORIENT.miss"
   nmiss="$(grep -c . "$ORIENT.miss" 2>/dev/null)"; nmiss="${nmiss:-0}"
-  [ "$nmiss" -gt 0 ] && guarded ledger-stale "LEDGER.md orient region names $nmiss repo path(s) that do not exist ($(head -3 "$ORIENT.miss" | tr '\n' ' ' | sed 's/ $//; s/ /, /g')) — stale orient text (BM-ORIENT-01, V3)" "docs/build/LEDGER.md"
+  [ "$nmiss" -gt 0 ] && guarded ledger-stale "LEDGER.md orient region names $nmiss repo path(s) that do not exist ($(head -3 "$ORIENT.miss" | tr '\n' ' ' | sed 's/ $//; s/ /, /g')) — stale orient text (BM-ORIENT-01, V3)" "$BREL/LEDGER.md"
   rm -f "$ORIENT.miss"
   # Defaults + the repo's record_policy/stale_tokens.txt (one token per line; `!token` retires a default).
   STALE_TOK="$(newtmp)"; printf '%s\n' '.agents/scratch' 'gitignored' 'Do not resume until' > "$STALE_TOK"
@@ -905,7 +928,7 @@ if [ -f "$LEDGER" ]; then
   while IFS= read -r tok; do
     [ -n "$tok" ] || continue
     tl="$(grep -nF -- "$tok" "$ORIENT" | head -1 | cut -d: -f1)"
-    [ -n "$tl" ] && guarded ledger-stale "LEDGER.md orient region (line $tl) carries the stale token '$tok' — supersede it in OPERATING MODE, archive the old text (BM-ORIENT-01, V3)" "docs/build/LEDGER.md" "" "$tok"
+    [ -n "$tl" ] && guarded ledger-stale "LEDGER.md orient region (line $tl) carries the stale token '$tok' — supersede it in OPERATING MODE, archive the old text (BM-ORIENT-01, V3)" "$BREL/LEDGER.md" "" "$tok"
   done < "$STALE_TOK"
 
   # One append target: the last "## " heading is a PHASE LOG heading (BM-LEDGER-06).
@@ -913,7 +936,7 @@ if [ -f "$LEDGER" ]; then
   if grep -qE '^##[[:space:]]+PHASE LOG' "$LEDGER"; then
     if ! printf '%s' "$last_h" | grep -qE '^##[[:space:]]+PHASE LOG([[:space:]]|$)' \
        || printf '%s' "$last_h" | grep -qE '^##[[:space:]]+PHASE LOG[[:space:]]+INDEX'; then
-      guarded ledger-budget "LEDGER.md: the last region is '$last_h', not a PHASE LOG heading — new entries go only at the end of the file (BM-LEDGER-06)" "docs/build/LEDGER.md"
+      guarded ledger-budget "LEDGER.md: the last region is '$last_h', not a PHASE LOG heading — new entries go only at the end of the file (BM-LEDGER-06)" "$BREL/LEDGER.md"
     fi
   fi
   # PHASE LOG entries <= 2 KiB: guarded in the last (current) PHASE LOG region; a warning in older regions.
@@ -933,8 +956,8 @@ if [ -f "$LEDGER" ]; then
     }' "$LEDGER")"
   pl_entries="$(printf '%s' "$plog" | cut -f1)"
   pl_nl="$(printf '%s' "$plog" | cut -f2)"; pl_no="$(printf '%s' "$plog" | cut -f4)"; last3_b="$(printf '%s' "$plog" | cut -f6)"
-  [ "${pl_nl:-0}" -gt 0 ] && guarded ledger-budget "LEDGER.md: $pl_nl PHASE LOG entr(y/ies) in the current region exceed 2 KiB (BM-LEDGER-06; lines:$(printf '%s' "$plog" | cut -f3))" "docs/build/LEDGER.md"
-  [ "${pl_no:-0}" -gt 0 ] && warn ledger-budget "LEDGER.md: $pl_no PHASE LOG entr(y/ies) in older regions exceed 2 KiB (legacy; lines:$(printf '%s' "$plog" | cut -f5))" "docs/build/LEDGER.md"
+  [ "${pl_nl:-0}" -gt 0 ] && guarded ledger-budget "LEDGER.md: $pl_nl PHASE LOG entr(y/ies) in the current region exceed 2 KiB (BM-LEDGER-06; lines:$(printf '%s' "$plog" | cut -f3))" "$BREL/LEDGER.md"
+  [ "${pl_no:-0}" -gt 0 ] && warn ledger-budget "LEDGER.md: $pl_no PHASE LOG entr(y/ies) in older regions exceed 2 KiB (legacy; lines:$(printf '%s' "$plog" | cut -f5))" "$BREL/LEDGER.md"
   # Orient probe (BM-ORIENT-01, V11): head + current RETURN PASS + last three PHASE LOG entries + the
   # next row's manifest line + its contract header ≤ 48 KiB (warn).
   if grep -qE '^###[[:space:]]+RETURN PASS[[:space:]]+—[[:space:]]+current' "$LEDGER"; then
@@ -952,7 +975,7 @@ if [ -f "$LEDGER" ]; then
   fi
   orient_b=$((head_b + ${rp_b:-0} + ${last3_b:-0} + nt_b))
   count orient-bytes "$orient_b" "$orient_b"
-  [ "$orient_b" -gt 49152 ] && warn ledger-budget "orient recipe reads $orient_b B (> 48 KiB: head $head_b · RETURN PASS ${rp_b:-0} · last 3 entries ${last3_b:-0} · next row $nt_b) (BM-ORIENT-01, V11)" "docs/build/LEDGER.md"
+  [ "$orient_b" -gt 49152 ] && warn ledger-budget "orient recipe reads $orient_b B (> 48 KiB: head $head_b · RETURN PASS ${rp_b:-0} · last 3 entries ${last3_b:-0} · next row $nt_b) (BM-ORIENT-01, V11)" "$BREL/LEDGER.md"
 
   # GATE DECISIONS rows in the 7-column form (BM-GATE-05, -09; guarded). Header-aware: a table row
   # with a `consequence` cell is a header; the table is 7-column iff that header also has `kind`.
@@ -970,8 +993,8 @@ if [ -f "$LEDGER" ]; then
       if (k == "pre-authorization" && ($0 !~ /expires:/ || $0 !~ /voided-by:/)) print NR "\tpreauth\t"
     }' "$LEDGER" | while IFS="$(printf '\t')" read -r gln gwhat gval; do
     case "$gwhat" in
-      kind)    guarded gate "LEDGER.md line $gln: GATE DECISIONS kind '${gval:-<empty>}' is not one of decision | pre-authorization | confirmation | waiver | correction (BM-GATE-05)" "docs/build/LEDGER.md" ;;
-      preauth) guarded gate "LEDGER.md line $gln: a pre-authorization row lacks expires: and/or voided-by: (scoped pre-authorization, BM-GATE-09)" "docs/build/LEDGER.md" ;;
+      kind)    guarded gate "LEDGER.md line $gln: GATE DECISIONS kind '${gval:-<empty>}' is not one of decision | pre-authorization | confirmation | waiver | correction (BM-GATE-05)" "$BREL/LEDGER.md" ;;
+      preauth) guarded gate "LEDGER.md line $gln: a pre-authorization row lacks expires: and/or voided-by: (scoped pre-authorization, BM-GATE-09)" "$BREL/LEDGER.md" ;;
     esac
   done
   # Pre-answered gate? A seed ledger (only the seed PHASE LOG entry) has no GATE DECISIONS
@@ -987,7 +1010,7 @@ if [ -f "$LEDGER" ]; then
         if (last != "pre-authorization") n++
       }
       END { print n + 0 }' "$LEDGER")"
-    [ "${gd_rows:-0}" -gt 0 ] && warn gate "LEDGER.md is a seed (PHASE LOG holds only the seed entry) but GATE DECISIONS has $gd_rows non-pre-authorization row(s) — pre-answered gate?" "docs/build/LEDGER.md"
+    [ "${gd_rows:-0}" -gt 0 ] && warn gate "LEDGER.md is a seed (PHASE LOG holds only the seed entry) but GATE DECISIONS has $gd_rows non-pre-authorization row(s) — pre-answered gate?" "$BREL/LEDGER.md"
   fi
   # DONE requires a signed GATE-ACCEPT readout (BM-TAIL-03).
   ps="$(lval projectStatus | awk '{print $1}')"
@@ -1001,7 +1024,7 @@ if [ -f "$LEDGER" ]; then
         ga_signed=1
       fi
     fi
-    [ "$ga_signed" -eq 1 ] || warn tail "projectStatus is DONE but docs/build/readouts/GATE-ACCEPT.md is missing or not signed (BM-TAIL-03)" "docs/build/readouts/GATE-ACCEPT.md"
+    [ "$ga_signed" -eq 1 ] || warn tail "projectStatus is DONE but $BREL/readouts/GATE-ACCEPT.md is missing or not signed (BM-TAIL-03)" "$BREL/readouts/GATE-ACCEPT.md"
   fi
 fi
 
@@ -1014,7 +1037,7 @@ if [ -f "$BI" ]; then
     local n f; n="$(awk -F'\t' -v k="$1" '$1 == k' "$BIX" | wc -l | tr -d ' ')"
     [ "$n" -gt 0 ] || return 0
     f="$(awk -F'\t' -v k="$1" '$1 == k {print "line " $2 " (" $3 ")"; exit}' "$BIX")"
-    warn index "BUILD_INDEX.md: $n $2 (first: $f)" "docs/build/BUILD_INDEX.md"
+    warn index "BUILD_INDEX.md: $n $2 (first: $f)" "$BREL/BUILD_INDEX.md"
   }
   agg cols "row(s) do not have the header's column count — an unescaped '|' in a cell? (BM-INDEX-01)"
   agg seq "duplicate seq value(s) (BM-INDEX-01)"
@@ -1022,7 +1045,7 @@ if [ -f "$BI" ]; then
   agg landed "landed date(s) later than the clock $NOW_DATE (BM-CLOCK-01)"
   awk -F'\t' '$1 == "pr" {print $2 "\t" $3}' "$BIX" | while IFS="$(printf '\t')" read -r ln tid; do
     [ -f "$BUILD/runs/$tid.md" ] && run_closed < "$BUILD/runs/$tid.md" \
-      && warn index "BUILD_INDEX.md line $ln: $tid still reads 'PR pending' but runs/$tid.md is Closed: — the PR cell is the real #<n> (BM-INDEX-01)" "docs/build/BUILD_INDEX.md" "$tid"
+      && warn index "BUILD_INDEX.md line $ln: $tid still reads 'PR pending' but runs/$tid.md is Closed: — the PR cell is the real #<n> (BM-INDEX-01)" "$BREL/BUILD_INDEX.md" "$tid"
   done
 fi
 
@@ -1032,18 +1055,18 @@ if [ -f "$LEDGER" ]; then
   if [ -n "$fut_pl" ]; then
     # entries carrying future-ok are legitimate
     fut_pl="$(awk -F'\t' -v now="$NOW_DATE" '$7 != "" && $7 > now {print $1 " " $7}' "$PL" | while read -r ln d; do sed -n "${ln}p" "$LEDGER" | grep -q 'future-ok' || printf '%s %s\n' "$ln" "$d"; done | awk 'NR == 1 {f = "line " $1 " " $2} {n++} END {if (n) print n "\t" f}')"
-    [ -n "$fut_pl" ] && warn clock "LEDGER.md: $(printf '%s' "$fut_pl" | cut -f1) PHASE LOG lead date(s) later than the clock $NOW_DATE (first: $(printf '%s' "$fut_pl" | cut -f2)) — record dates come from \`date -u\` (BM-CLOCK-01)" "docs/build/LEDGER.md"
+    [ -n "$fut_pl" ] && warn clock "LEDGER.md: $(printf '%s' "$fut_pl" | cut -f1) PHASE LOG lead date(s) later than the clock $NOW_DATE (first: $(printf '%s' "$fut_pl" | cut -f2)) — record dates come from \`date -u\` (BM-CLOCK-01)" "$BREL/LEDGER.md"
   fi
   fut_g="$(LC_ALL=C awk -F'|' "$CLOCK_AWK"' /^##[[:space:]]/ {g = ($0 ~ /^##[[:space:]]+GATE DECISIONS/); next}
     g && /^\|/ && $0 !~ /future-ok/ && match($2, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]([T ][0-9][0-9]:[0-9][0-9](:[0-9][0-9])?Z?)?/) {
       d = substr($2, RSTART, RLENGTH); bad = has_time(d) ? (epoch(d) > '"$NOW_EPOCH"' + 300) : (d > "'"$NOW_DATE"'")
       if (bad) { n++; if (!f) f = "line " NR " " d } }
     END { if (n) print n "\t" f }' "$LEDGER")"
-  [ -n "$fut_g" ] && warn clock "LEDGER.md: $(printf '%s' "$fut_g" | cut -f1) GATE DECISIONS date(s) later than the clock $NOW_ISO (first: $(printf '%s' "$fut_g" | cut -f2)) (BM-CLOCK-01)" "docs/build/LEDGER.md"
+  [ -n "$fut_g" ] && warn clock "LEDGER.md: $(printf '%s' "$fut_g" | cut -f1) GATE DECISIONS date(s) later than the clock $NOW_ISO (first: $(printf '%s' "$fut_g" | cut -f2)) (BM-CLOCK-01)" "$BREL/LEDGER.md"
   upd="$(lval updatedAt | awk '{print $1}')"
   case "$upd" in [0-9][0-9][0-9][0-9]-*)
     if awk "$CLOCK_AWK"' BEGIN { d = ARGV[1]; ARGV[1] = ""; exit !(has_time(d) ? (epoch(d) > '"$NOW_EPOCH"' + 300) : (substr(d, 1, 10) > "'"$NOW_DATE"'")) }' "$upd"; then
-      warn clock "LEDGER.md updatedAt $upd is later than the clock $NOW_ISO (BM-CLOCK-01)" "docs/build/LEDGER.md" "updatedAt"
+      warn clock "LEDGER.md updatedAt $upd is later than the clock $NOW_ISO (BM-CLOCK-01)" "$BREL/LEDGER.md" "updatedAt"
     fi ;;
   esac
 fi
@@ -1052,13 +1075,13 @@ if [ -f "$DEF" ]; then
       s = $0; while (match(s, /(OPEN|PARTIAL|DONE|WONTFIX|ACCEPTED-SKELETON|DEFERRED-AGAIN)[^0-9|]*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)) {
         d = substr(s, RSTART + RLENGTH - 10, 10); if (d > now) { n++; if (!f) f = "line " NR " " d }; s = substr(s, RSTART + RLENGTH) } }
     END { if (n) print n "\t" f }' "$DEF")"
-  [ -n "$fut_d" ] && warn clock "DEFERRALS.md: $(printf '%s' "$fut_d" | cut -f1) status date(s) later than the clock $NOW_DATE (first: $(printf '%s' "$fut_d" | cut -f2)) (BM-CLOCK-01)" "docs/tickets/DEFERRALS.md"
+  [ -n "$fut_d" ] && warn clock "DEFERRALS.md: $(printf '%s' "$fut_d" | cut -f1) status date(s) later than the clock $NOW_DATE (first: $(printf '%s' "$fut_d" | cut -f2)) (BM-CLOCK-01)" "$TREL/DEFERRALS.md"
 fi
 if [ -d "$BUILD/runs" ]; then
   fut_r="$(for r in "$BUILD"/runs/*.md; do [ -f "$r" ] || continue
       awk -v now="$NOW_DATE" -v fn="$(basename "$r")" 'NR > 40 {exit} /^[[:space:]]*(-[[:space:]]*)?(\*\*)?(Started|Closed|Date):/ && $0 !~ /future-ok/ && match($0, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) {
         d = substr($0, RSTART, RLENGTH); if (d > now) { print fn ":" NR " " d; exit } }' "$r"; done | awk 'NR == 1 {f = $0} {n++} END {if (n) print n "\t" f}')"
-  [ -n "$fut_r" ] && warn clock "runs/: $(printf '%s' "$fut_r" | cut -f1) run ledger(s) carry a Started/Closed/Date stamp later than the clock $NOW_DATE (first: $(printf '%s' "$fut_r" | cut -f2)) (BM-CLOCK-01)" "docs/build/runs"
+  [ -n "$fut_r" ] && warn clock "runs/: $(printf '%s' "$fut_r" | cut -f1) run ledger(s) carry a Started/Closed/Date stamp later than the clock $NOW_DATE (first: $(printf '%s' "$fut_r" | cut -f2)) (BM-CLOCK-01)" "$BREL/runs"
 fi
 
 # ── 7e. Readouts carry the guard sentence (BM-INDEX-03); run ledgers carry Harness: (BM-HARNESS-01) ──
@@ -1070,12 +1093,12 @@ if [ -d "$BUILD/readouts" ]; then
     b="$(basename "$ro")"; [ "$b" = "_TEMPLATE.md" ] && continue
     nro=$((nro + 1))
     tr '\n' ' ' < "$ro" | sed -E 's/[[:space:]>]+/ /g' | grep -qiF "$GUARD_SENT" && continue
-    if created_after_marker "docs/build/readouts/$b"; then
-      viol readout "readouts/$b lacks the guard sentence (\"An operator or authorized human record supplies the decision; an agent must not sign or assume silence is approval.\") (BM-INDEX-03)" "docs/build/readouts/$b"
+    if created_after_marker "$BREL/readouts/$b"; then
+      viol readout "readouts/$b lacks the guard sentence (\"An operator or authorized human record supplies the decision; an agent must not sign or assume silence is approval.\") (BM-INDEX-03)" "$BREL/readouts/$b"
     else nmiss=$((nmiss + 1)); [ -n "$firstm" ] || firstm="$b"; fi
   done
   count readout-guard "$nro" "$nro"
-  [ "$nmiss" -gt 0 ] && warn readout "$nmiss readout(s) predate the guard sentence (first: $firstm); readouts created after the guards marker must carry it (BM-INDEX-03)" "docs/build/readouts"
+  [ "$nmiss" -gt 0 ] && warn readout "$nmiss readout(s) predate the guard sentence (first: $firstm); readouts created after the guards marker must carry it (BM-INDEX-03)" "$BREL/readouts"
 fi
 if [ -d "$BUILD/runs" ]; then
   nrun=0; nmiss=0; firstm=""
@@ -1083,12 +1106,12 @@ if [ -d "$BUILD/runs" ]; then
     [ -f "$r" ] || continue
     b="$(basename "$r")"; nrun=$((nrun + 1))
     grep -qE '^[[:space:]]*(-[[:space:]]*)?(\*\*)?Harness:' "$r" && continue
-    if created_after_marker "docs/build/runs/$b"; then
-      viol harness "runs/$b has no 'Harness: <harness>/<model-id>/<tier>' header line (BM-HARNESS-01)" "docs/build/runs/$b"
+    if created_after_marker "$BREL/runs/$b"; then
+      viol harness "runs/$b has no 'Harness: <harness>/<model-id>/<tier>' header line (BM-HARNESS-01)" "$BREL/runs/$b"
     else nmiss=$((nmiss + 1)); [ -n "$firstm" ] || firstm="$b"; fi
   done
   count run-harness "$nrun" "$nrun"
-  [ "$nmiss" -gt 0 ] && warn harness "$nmiss run ledger(s) have no 'Harness:' header line (first: $firstm); new run ledgers must name harness/model/tier (BM-HARNESS-01)" "docs/build/runs"
+  [ "$nmiss" -gt 0 ] && warn harness "$nmiss run ledger(s) have no 'Harness:' header line (first: $firstm); new run ledgers must name harness/model/tier (BM-HARNESS-01)" "$BREL/runs"
 fi
 
 # ── 8. REQ coverage (only when spec + pattern resolve) ───────────────────────
@@ -1162,7 +1185,7 @@ if [ -n "$REQ_PATTERN" ] && [ -n "${SPEC:-}" ] && [ -f "${SPEC:-/nonexistent}" ]
       b="$(basename "$f")"; [ "$b" = "00_MANIFEST.md" ] && continue; is_companion "$b" && continue
       grep -oE "$REQ_PATTERN" "$f" 2>/dev/null | sort -u | while IFS= read -r rid; do
         [ -n "$rid" ] || continue
-        grep -qxF "$rid" "$SPEC_IDS" || warn reqcov "ticket $b cites $rid which is not in the spec" "docs/tickets/$b" "" "$rid"
+        grep -qxF "$rid" "$SPEC_IDS" || warn reqcov "ticket $b cites $rid which is not in the spec" "$TREL/$b" "" "$rid"
       done
     done
   fi
@@ -1187,15 +1210,15 @@ if [ -n "$REQ_PATTERN" ] && [ -n "${SPEC:-}" ] && [ -f "${SPEC:-/nonexistent}" ]
     while IFS="$(printf '\t')" read -r rnd ln entry owner; do
       [ -n "$entry" ] || continue
       if ! printf '%s\n' "$entry" | grep -qxE "$REQ_PATTERN"; then
-        viol reqindex "manifest index row (Round $rnd, line $ln) '$entry' is not exactly one literal requirement id (OF-21)" "docs/tickets/00_MANIFEST.md" "" "$entry"; continue
+        viol reqindex "manifest index row (Round $rnd, line $ln) '$entry' is not exactly one literal requirement id (OF-21)" "$TREL/00_MANIFEST.md" "" "$entry"; continue
       fi
-      grep -qxF "$entry" "$SPEC_IDS" || { viol reqindex "manifest index id $entry (line $ln) is not in the spec" "docs/tickets/00_MANIFEST.md" "" "$entry"; continue; }
-      if grep -qxF "$entry" "$SEEN_IDX"; then viol reqindex "manifest index lists $entry twice (every in-scope id has exactly one owner)" "docs/tickets/00_MANIFEST.md" "" "$entry"; continue; fi
+      grep -qxF "$entry" "$SPEC_IDS" || { viol reqindex "manifest index id $entry (line $ln) is not in the spec" "$TREL/00_MANIFEST.md" "" "$entry"; continue; }
+      if grep -qxF "$entry" "$SEEN_IDX"; then viol reqindex "manifest index lists $entry twice (every in-scope id has exactly one owner)" "$TREL/00_MANIFEST.md" "" "$entry"; continue; fi
       printf '%s\n' "$entry" >> "$SEEN_IDX"
       case "$owner" in
         deferred\(*\)) nok=$((nok + 1)) ;;
         *) if cut -f1 "$ID_SEQ" | grep -qxF "$owner"; then nok=$((nok + 1))
-           else viol reqindex "manifest index row for $entry names owner '$owner', which is no ticket id of the chain" "docs/tickets/00_MANIFEST.md" "" "$entry"; fi ;;
+           else viol reqindex "manifest index row for $entry names owner '$owner', which is no ticket id of the chain" "$TREL/00_MANIFEST.md" "" "$entry"; fi ;;
       esac
     done < "$IDX"
     count reqindex "$nidx" "$nok"
@@ -1207,7 +1230,7 @@ if [ -n "$REQ_PATTERN" ] && [ -n "${SPEC:-}" ] && [ -f "${SPEC:-/nonexistent}" ]
           LC_ALL=C awk '/^##[[:space:]]+Requirement IDs/ { s = 1; next } s && /^##[[:space:]]/ { s = 0 } s' "$TICKETS/$b" \
             | grep -oE "$REQ_PATTERN" | sort -u | while IFS= read -r rid; do
                 got="$(awk -F'\t' -v R="$rid" '$3 == R { print $4; exit }' "$IDX")"
-                [ "$got" = "$tid" ] || warn reqindex "ticket $b stamps $rid but the manifest index assigns it to '${got:-nothing}'" "docs/tickets/$b" "" "$rid"
+                [ "$got" = "$tid" ] || warn reqindex "ticket $b stamps $rid but the manifest index assigns it to '${got:-nothing}'" "$TREL/$b" "" "$rid"
               done
         done
   fi
@@ -1220,7 +1243,7 @@ if [ "$IN_GIT" -eq 1 ]; then
   LIVING_KEYS='nextTicket|lastCompleted|projectStatus|chainTip|returnPass|EXPECTED_ROWS'
   git -C "$REPO" ls-files 2>/dev/null \
     | grep -E '(^|/)(tests?|__tests__|spec)/|(^|/)test_[^/]*\.[a-z]+$|_test\.[a-z]+$|\.(test|spec)\.[jt]sx?$' \
-    | grep -vE '^docs/(build|tickets)/' | while IFS= read -r tf; do
+    | grep -vE "^($BREL|$TREL)/" | while IFS= read -r tf; do
       [ -f "$REPO/$tf" ] || continue
       grep -qE "$LIVING_FILES" "$REPO/$tf" 2>/dev/null || continue
       hit="$(grep -nE "$LIVING_KEYS" "$REPO/$tf" 2>/dev/null | head -1 | cut -d: -f1)"

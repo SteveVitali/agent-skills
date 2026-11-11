@@ -10,7 +10,8 @@
 #   migrate-legacy-scratch.sh --from <scratch_dir> [--to <docs/build>] [--apply]
 #
 #   --from    Legacy scratch dir (e.g. .agents/scratch or $AGENT_SCRATCH_DIR). Required.
-#   --to      Destination memory root. Default: <repo>/docs/build.
+#   --to      Destination memory root. Default: $BUILD_MEMORY_ROOT (relative → against the toplevel; a
+#             monorepo subproject, BM-ROOT-03), else <repo>/docs/build.
 #   --apply   Perform the migration. Without it, print the dry-run plan and exit.
 #
 # Mapping:
@@ -55,7 +56,13 @@ done
 FROM="$(cd "$FROM" && pwd -P)"    # physical path (macOS /private symlink)
 REPO="$(git -C "$FROM" rev-parse --show-toplevel 2>/dev/null || git rev-parse --show-toplevel 2>/dev/null || pwd)"
 REPO="$(cd "$REPO" && pwd -P)"
+# shellcheck source=bm-paths.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bm-paths.sh"
+if [ -z "$TO" ] && [ -n "${BUILD_MEMORY_ROOT:-}" ]; then TO="$(bm_resolve_against "$BUILD_MEMORY_ROOT" "$REPO")"; fi
 [ -n "$TO" ] || TO="$REPO/docs/build"
+# The keys appended to the ledger name the root toplevel-relative (docs/build in a single-repo layout).
+TO_REL="docs/build"; case "$TO" in "$REPO"/*) TO_REL="${TO#"$REPO"/}" ;; esac
+MAN_REL="$(dirname "$TO_REL")/tickets/00_MANIFEST.md"; [ "$(dirname "$TO_REL")" = "." ] && MAN_REL="tickets/00_MANIFEST.md"
 MARKER='<!-- build-memory: v2 -->'
 
 # ── ID resolver ──────────────────────────────────────────────────────────────
@@ -186,12 +193,12 @@ while IFS="$(printf '\t')" read -r act orig dest; do
       if grep -qE '^[[:space:]]*manifest:' "$dest"; then :; else
         # insert the added keys just after the projectStatus line (inside CURRENT STATE)
         tmp="$(mktemp)"
-        awk '
+        awk -v man="$MAN_REL" -v mem="$TO_REL" '
           BEGIN{done=0}
           /^[[:space:]]*projectStatus:/ && !done {
             print
-            print "manifest:        docs/tickets/00_MANIFEST.md   # added by migrate"
-            print "memoryRoot:      docs/build                    # added by migrate"
+            printf "manifest:        %-29s # added by migrate\n", man
+            printf "memoryRoot:      %-29s # added by migrate\n", mem
             print "round:           2                             # added by migrate"
             done=1; next
           }

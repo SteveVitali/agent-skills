@@ -46,6 +46,14 @@ The layout it reads and writes (`docs/research-ledger.md`, `docs/research/`, `do
 `docs/decomposition-prompt.md`) is defined in `skills/build-memory/layout.md`; this skill cites it and does not
 restate the tree.
 
+**`docs/` is the docs root (BM-ROOT-03).** Every `docs/…` path in this skill and its modes is relative to the
+**docs root** — the parent of the build memory root. In a single repo that is `<toplevel>/docs`. In a monorepo
+subproject, with `BUILD_MEMORY_ROOT=<sub>/docs/build` set (the root need not exist yet), it is `<sub>/docs`:
+`bash <skills>/build-memory/scripts/memory-root.sh --paths --allow-missing` prints it as `docs=`, so the ledger is
+`<sub>/docs/research-ledger.md`, the notes `<sub>/docs/research/`, and so on. The freshness check then resolves
+`--planning docs/research-ledger.md` under `<sub>/docs` by itself; a toplevel-relative
+`--planning <sub>/docs/research-ledger.md` works too. With the variable unset, nothing changes.
+
 ## Orient (every invocation)
 
 Resolve the mode from the ledger, the way `orchestrate-build` orients:

@@ -8,6 +8,10 @@
 # and takes the session's own lines as flags (production anomalies read, spend, agent usage). It never
 # invents a figure: a line it cannot read says so ("unknown (gh absent)", "not reported").
 #
+# The default-branch line names what moved via external-state.sh (default-advanced, chain-merged, a foreign
+# commit, …); an in-order operator merge under a live `ext:merge-in-order` pre-authorization reads "expected".
+# A memory root in a monorepo subproject (BM-ROOT-03) is validated there and its DEFERRALS read from there.
+#
 # Usage:
 #   digest.sh --ledger <docs/build/LEDGER.md> [--trigger <pause|wave|round|session-end|usage-limit|block|gate>]
 #             [--production "<what was read, and what was found>"] [--spend "<infra spend + source>"]
@@ -50,7 +54,16 @@ ROOT="$(dirname "$LEDGER")"                       # the memory root (docs/build)
 REPO="$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null || dirname "$(dirname "$ROOT")")"
 [ -n "$WT" ] || WT="$REPO"
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CIB="$SELF/ci-boundary.sh"; VAL="$SELF/../../build-memory/scripts/check-build-memory.sh"
+CIB="$SELF/ci-boundary.sh"; VAL="$SELF/../../build-memory/scripts/check-build-memory.sh"; EXT="$SELF/external-state.sh"
+# A committed memory root that is not <toplevel>/docs/build (a monorepo subproject, BM-ROOT-03) is passed to the
+# validator explicitly, and its tickets dir is the root's sibling (bm-paths.sh); otherwise the 0.5.3 paths.
+VAL_ARGS=("$REPO") ; DEF="$REPO/docs/tickets/DEFERRALS.md"
+if grep -qF '<!-- build-memory: v2 -->' "$ROOT/README.md" 2>/dev/null && [ "$(cd "$ROOT" && pwd -P)" != "$(cd "$REPO" 2>/dev/null && pwd -P)/docs/build" ]; then
+  # shellcheck source=../../build-memory/scripts/bm-paths.sh
+  . "$SELF/../../build-memory/scripts/bm-paths.sh"
+  bm_set_paths "$(cd "$ROOT" && pwd -P)" "$ROOT" && DEF="$BM_TICKETS/DEFERRALS.md"
+  VAL_ARGS=(--memory-root "$ROOT")
+fi
 NOW="${NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"; DAY="$(printf '%s' "$NOW" | cut -c1-10)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP" 2>/dev/null' EXIT
 
@@ -79,7 +92,7 @@ fi
   H="$(val harness)"; echo "- **Harness:** ${H:-(not recorded in CURRENT STATE \`harness:\`)}"
   echo "- **Ledger:** projectStatus $(val projectStatus) · nextTicket $(val nextTicket) · lastCompleted $(val lastCompleted) · blockedOn $(val blockedOn) · pauseRequested $(val pauseRequested) · returnPass $(val returnPass) · round $(val round)"
   if [ -f "$VAL" ]; then
-    vout="$(bash "$VAL" "$REPO" --json "$TMP/v.json" 2>&1)"; vrc=$?
+    vout="$(bash "$VAL" "${VAL_ARGS[@]}" --json "$TMP/v.json" 2>&1)"; vrc=$?
     vsum="$(printf '%s\n' "$vout" | grep -E '^  (✓|✗)' | head -1 | sed -E 's/^  //')"
     echo "- **Validator:** check-build-memory.sh exit $vrc — ${vsum:-no summary}"
   else
@@ -122,6 +135,18 @@ fi
     tip="$(val chainTip)"; desc="unknown"
     if [ -n "$tip" ] && git -C "$WT" rev-parse --verify -q "$tip" >/dev/null 2>&1; then
       git -C "$WT" merge-base --is-ancestor "$def" "$tip" 2>/dev/null && desc="yes" || desc="NO — an off-stack merge or a rebase: a blockedOn for the operator"
+      # external-state.sh names the event; an informational one or an expected one (a live ext:merge-in-order
+      # pre-authorization) is not a block, anything else keeps the line above and adds the event.
+      # A chain that descends can still have a moved remote branch (a foreign push): that block is added too.
+      if [ -f "$EXT" ]; then
+        xout="$(bash "$EXT" --ledger "$LEDGER" --worktree "$WT" --default "$def" --now "$NOW" 2>/dev/null)"; xrc=$?
+        xlast="$(printf '%s\n' "$xout" | tail -1)"
+        if [ "$desc" != "yes" ]; then
+          case "$xrc" in 0) desc="NO — $xlast" ;; 3) desc="$desc — $xlast" ;; esac
+        elif [ "$xrc" -eq 3 ]; then
+          desc="yes — $xlast"
+        fi
+      fi
     fi
     echo "- **Default branch:** $def @ $(git -C "$WT" rev-parse --short "$def") ($(git -C "$WT" log -1 --format=%cI "$def")) — chain descends from it: $desc"
   else
@@ -129,7 +154,6 @@ fi
   fi
   # owed human and rights work: OPEN/PARTIAL kind-P deferral rows (owner, trigger)
   echo "- **Owed human and rights work** (OPEN/PARTIAL kind-P rows, DEFERRALS rule 5):"
-  DEF="$REPO/docs/tickets/DEFERRALS.md"
   if [ -f "$DEF" ]; then
     LC_ALL=C awk -F'|' '
       function trim(x) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", x); return x }

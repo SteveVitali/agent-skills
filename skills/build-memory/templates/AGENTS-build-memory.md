@@ -27,3 +27,6 @@ from the previous ticket's branch); a **gate is a pause, not a block**; **secret
 any ledger (record `provided: yes/no`); every date comes from `date -u`. Validate with
 `bash <skills>/build-memory/scripts/check-build-memory.sh .`, and before a closeout commit with
 `check-build-memory.sh . --staged` (history mode: protected records only gain lines, at their ends).
+<!-- In a monorepo subproject (BM-ROOT-03), write the paths above under the subproject (e.g.
+     `<sub>/docs/tickets/DEFERRALS.md`) and add: "Build memory lives in `<sub>/docs/`: every build-memory
+     script runs with `BUILD_MEMORY_ROOT=<sub>/docs/build` set (relative to the repo root)." -->

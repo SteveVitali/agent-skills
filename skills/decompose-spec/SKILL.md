@@ -244,6 +244,14 @@ is revisable.
 `skills/build-memory/layout.md` and does not restate the tree. If `ledger=false`, skip every write and present
 the plan + all sections to the operator instead.
 
+**Where `docs/` is (BM-ROOT-03).** Resolve the root first: `bash skills/build-memory/scripts/memory-root.sh
+--paths --allow-missing`. In a monorepo subproject (`BUILD_MEMORY_ROOT=<sub>/docs/build`) every `docs/build/…`,
+`docs/tickets/…`, `docs/adr/…` and `docs/…` path in this phase is the same path under `<sub>/` (the printed
+`root=`, `tickets=`, `adr=`, `docs=`), and the ledger's path values are written **toplevel-relative** —
+`manifest: <sub>/docs/tickets/00_MANIFEST.md`, `memoryRoot: <sub>/docs/build`, run lines
+`implement-spec spec=<sub>/docs/tickets/<file>` — so an agent at the worktree toplevel opens them directly (the
+validator resolves both forms). With `BUILD_MEMORY_ROOT` unset these are the literal `docs/…` paths, unchanged.
+
 **1. Initialise the layout.** Invoke the `build-memory` skill in `init` mode (idempotent — never overwrites an
 existing file). In **committed** mode this creates `docs/build/{README.md (with the marker), LEDGER.md,
 BUILD_INDEX.md, logs/.gitignore}`, `docs/adr/{README.md, _TEMPLATE.md}`, `docs/tickets/{_TEMPLATE.md,
@@ -284,7 +292,8 @@ section.
 **6. Persist the hand-off** when this run was invoked from a `docs/decomposition-prompt.md` — keep that file as
 the frozen record of the exact invocation and binding constraints.
 
-**7. Validate.** Run `bash skills/build-memory/scripts/check-build-memory.sh .` — it must exit 0 (layout, ticket
+**7. Validate.** Run `bash skills/build-memory/scripts/check-build-memory.sh .` (with `BUILD_MEMORY_ROOT` set in a
+subproject) — it must exit 0 (layout, ticket
 grammar + unique sequence, manifest ↔ files, backward deps, skeletons w/o run lines, DEFERRALS, ADR index, ledger
 keys, REQ coverage). A failure is a real block: fix the seed, don't hand off a red layout. In committed mode,
 this is the state `orchestrate-build` commits at SETUP.
