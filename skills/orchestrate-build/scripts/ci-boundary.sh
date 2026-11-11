@@ -28,14 +28,16 @@
 #   --interval  Poll interval in seconds while checks are pending (default 60).
 #   --max-wait  Bounded wait for pending checks, in seconds (default 2700). --no-wait = one read.
 #
-# Required set: <worktree>/docs/build/tools/record_policy/ci_required.txt (one check name per line,
+# Required set: <worktree>/<memory root>/tools/record_policy/ci_required.txt (one check name per line,
 #   `#` comments) when present — each listed check must be reported and pass (missing or skipped
 #   is a failure once the wait ends; other checks are informational); otherwise every check
 #   reported on the head must pass (a skipped check is neutral; zero reported checks is pending).
 # Waiver: a 7-column GATE DECISIONS row in --ledger whose kind is `waiver` and which names `#<n>`
 #   and the check waives that failing check on PR <n> only (the operator's words, verbatim —
 #   BM-GATE-05). An inherited red that reappears on a descendant PR needs that PR named too.
-# Repo hook: if <worktree>/docs/build/tools/ci_boundary.py, ci_boundary.sh or an executable
+# Memory root: docs/build, or — a monorepo subproject (BM-ROOT-03) — the committed --ledger's dir relative to its
+#   worktree toplevel, else $BUILD_MEMORY_ROOT (relative to the worktree).
+# Repo hook: if <worktree>/<memory root>/tools/ci_boundary.py, ci_boundary.sh or an executable
 #   ci_boundary exists, it runs instead with `--pr <n> --json <path>` and its exit code is passed
 #   through (it owns the required set, the stack and the wait). The caller's `--ledger PATH`,
 #   `--interval S`, and `--max-wait S` / `--no-wait` are forwarded when given AND the hook's file
@@ -119,9 +121,21 @@ fi
 [ -n "$WT" ] || WT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$WT" 2>/dev/null || die_usage "--worktree $WT is not a directory"
 
-POLICY="docs/build/tools/record_policy/ci_required.txt"
+# The memory root, relative to the worktree (BM-ROOT-03): a committed-mode --ledger's own position under its
+# toplevel (a monorepo subproject's sub/proj/docs/build), else $BUILD_MEMORY_ROOT, else docs/build.
+MREL="docs/build"
+if [ -n "$LEDGER" ] && grep -qF '<!-- build-memory: v2 -->' "$(dirname "$LEDGER")/README.md" 2>/dev/null; then
+  _ld="$(cd "$(dirname "$LEDGER")" && pwd -P)"; _lt="$(git -C "$_ld" rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$_lt" ] && case "$_ld" in "$_lt"/*) MREL="${_ld#"$_lt"/}" ;; esac
+elif [ -n "${BUILD_MEMORY_ROOT:-}" ]; then
+  case "$BUILD_MEMORY_ROOT" in
+    /*) _wt="$(pwd -P)"; case "$BUILD_MEMORY_ROOT" in "$_wt"/*) MREL="${BUILD_MEMORY_ROOT#"$_wt"/}" ;; esac ;;
+    *)  MREL="${BUILD_MEMORY_ROOT%/}" ;;
+  esac
+fi
+POLICY="$MREL/tools/record_policy/ci_required.txt"
 HOOK=""
-for h in docs/build/tools/ci_boundary.py docs/build/tools/ci_boundary.sh docs/build/tools/ci_boundary; do
+for h in "$MREL/tools/ci_boundary.py" "$MREL/tools/ci_boundary.sh" "$MREL/tools/ci_boundary"; do
   if [ -f "$h" ]; then HOOK="$h"; break; fi
 done
 

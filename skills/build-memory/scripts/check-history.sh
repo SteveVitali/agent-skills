@@ -19,8 +19,8 @@
 #     unexpired allow entry (R5); no commit is later than the clock (R6).
 #
 # Usage:
-#   check-history.sh [--repo DIR] --range BASE..HEAD | --range BASE...HEAD | --staged | --first-parent SHA
-#                    [--json PATH] [--now ISO] [--no-hook]
+#   check-history.sh [--repo DIR] [--memory-root DIR] --range BASE..HEAD | --range BASE...HEAD | --staged
+#                    | --first-parent SHA [--json PATH] [--now ISO] [--no-hook]
 #   check-history.sh [--repo DIR] --replay FROM..TO [--json PATH]   read-only backtest: every first-parent
 #                    commit of the range judged on its own (one line per commit; exit 1 if any violates)
 #   (also reached as: check-build-memory.sh [repo] --range … | --staged | --first-parent …)
@@ -30,6 +30,9 @@
 #   --first-parent  one commit against its first parent (a push to the default branch, incl. merges).
 #   --now           the clock (default `date -u`; for tests).
 #   --no-hook       ignore a repo hook (tests).
+#   --memory-root   the memory root when it is not <repo>/docs/build (a monorepo subproject; else
+#                   $BUILD_MEMORY_ROOT — resolved as check-build-memory.sh does, via bm-paths.sh). Paths
+#                   below (docs/build/…, docs/tickets/…) are then relative to the project dir that holds it.
 #
 # Where it runs: implement-spec §6.5 (`--staged` before the closeout commit); orchestrate-build at every
 # boundary (`--range <chainTip before>..<chainTip after>`); CI (`base..head` on pull requests,
@@ -61,11 +64,12 @@
 
 set -o pipefail
 
-REPO="" ; MODE="" ; ARG="" ; JSON="" ; NOW_ARG="" ; NO_HOOK=0
+REPO="" ; MODE="" ; ARG="" ; JSON="" ; NOW_ARG="" ; NO_HOOK=0 ; MEMROOT=""
 usage() { awk 'NR > 1 && !/^#/ {exit} NR > 1 {sub(/^# ?/, ""); print}' "$0"; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo)         REPO="${2:-}"; shift 2 ;;
+    --memory-root)  MEMROOT="${2:-}"; shift 2 ;;
     --range)        MODE=range; ARG="${2:-}"; shift 2 ;;
     --first-parent) MODE=first-parent; ARG="${2:-}"; shift 2 ;;
     --staged)       MODE=staged; shift ;;
@@ -80,23 +84,29 @@ done
 [ -n "$MODE" ] || { echo "check-history: one of --range, --staged, --first-parent, --replay is required" >&2; exit 5; }
 REPO="${REPO:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 REPO="$(cd "$REPO" 2>/dev/null && pwd)" || { echo "check-history: no such repo" >&2; exit 5; }
+# shellcheck source=bm-paths.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bm-paths.sh"
+# The project dir that holds the memory root (BM-ROOT-03); git runs there, so every path below is relative to
+# it (`git diff --relative`, `<rev>:./<path>`) — in a single-repo layout it is the toplevel, as before.
+bm_resolve "$REPO" "$MEMROOT" || { echo "check-history: $BM_ERR" >&2; exit 2; }
+REPO="$BM_PROJECT" ; BREL="$BM_BREL" ; TREL="$BM_TREL" ; AREL="$BM_AREL" ; DREL="$BM_DREL"
 G() { git -C "$REPO" "$@"; }
 
-if [ ! -f "$REPO/docs/build/README.md" ] || ! grep -qF '<!-- build-memory: v2 -->' "$REPO/docs/build/README.md"; then
+if [ ! -f "$BM_BUILD/README.md" ] || ! grep -qF '<!-- build-memory: v2 -->' "$BM_BUILD/README.md"; then
   echo "check-history: $REPO is not a build-memory repo (scratch mode) — not applicable."
   exit 2
 fi
 
 # Repo hook: the repo's own guard is authoritative.
 if [ "$NO_HOOK" -eq 0 ] && [ "$MODE" != replay ]; then
-  H="$REPO/docs/build/tools"
+  H="$BM_BUILD/tools"
   set -- all
   case "$MODE" in range) set -- "$@" --range "$ARG" ;; first-parent) set -- "$@" --first-parent "$ARG" ;; staged) set -- "$@" --staged ;; esac
   [ -n "$JSON" ] && set -- "$@" --json "$JSON"
   [ -n "$NOW_ARG" ] && set -- "$@" --now "$NOW_ARG"
-  if [ -f "$H/memory_guard.py" ]; then echo "check-history: delegating to docs/build/tools/memory_guard.py"; ( cd "$REPO" && python3 "$H/memory_guard.py" "$@" ); exit $?; fi
-  if [ -f "$H/memory_guard.sh" ]; then echo "check-history: delegating to docs/build/tools/memory_guard.sh"; ( cd "$REPO" && bash "$H/memory_guard.sh" "$@" ); exit $?; fi
-  if [ -x "$H/memory_guard" ]; then echo "check-history: delegating to docs/build/tools/memory_guard"; ( cd "$REPO" && "$H/memory_guard" "$@" ); exit $?; fi
+  if [ -f "$H/memory_guard.py" ]; then echo "check-history: delegating to $BREL/tools/memory_guard.py"; ( cd "$REPO" && python3 "$H/memory_guard.py" "$@" ); exit $?; fi
+  if [ -f "$H/memory_guard.sh" ]; then echo "check-history: delegating to $BREL/tools/memory_guard.sh"; ( cd "$REPO" && bash "$H/memory_guard.sh" "$@" ); exit $?; fi
+  if [ -x "$H/memory_guard" ]; then echo "check-history: delegating to $BREL/tools/memory_guard"; ( cd "$REPO" && "$H/memory_guard" "$@" ); exit $?; fi
 fi
 
 # Replay: judge every first-parent commit of FROM..TO on its own (the repo's own guard is not consulted:
@@ -109,7 +119,7 @@ if [ "$MODE" = replay ]; then
     || { echo "check-history: cannot write report to $JSON — unknown, never green" >&2; exit 5; }
   for c in $(G rev-list --reverse --first-parent "$ARG" 2>/dev/null); do
     n=$((n + 1))
-    bash "$self" --repo "$REPO" --first-parent "$c" --no-hook ${NOW_ARG:+--now "$NOW_ARG"} --json "$out.j" > "$out" 2>&1; rc=$?
+    bash "$self" --repo "$REPO" --memory-root "$BM_BUILD" --first-parent "$c" --no-hook ${NOW_ARG:+--now "$NOW_ARG"} --json "$out.j" > "$out" 2>&1; rc=$?
     rules="$(grep -oE '^    - [a-z-]+ \[[A-Za-z0-9-]+\]' "$out" | sed -E 's/^    - //' | sort | uniq -c | awk '{printf "%s%s×%s", (NR > 1 ? " " : ""), $2 $3, $1}')"
     [ "$rc" -eq 1 ] && bad=$((bad + 1))
     printf '%s %s exit=%s %s\n' "$(G log -1 --format='%h %cI' "$c")" "" "$rc" "$rules"
@@ -192,41 +202,42 @@ case "$NOW_EPOCH" in ''|-1|*[!0-9]*) echo "check-history: --now '$NOW_ISO' is no
 
 add() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >> "$W/out"; }   # V|W check file line commit rule message
 GUARDS=0
-grep -qE '^[[:space:]]*<!-- build-memory-guards: 1 -->[[:space:]]*$' "$REPO/docs/build/README.md" && GUARDS=1
+grep -qE '^[[:space:]]*<!-- build-memory-guards: 1 -->[[:space:]]*$' "$BM_BUILD/README.md" && GUARDS=1
 
 # ── Policy ──────────────────────────────────────────────────────────────────
-POL="$REPO/docs/build/tools/record_policy/history.policy"
+POL="$BM_BUILD/tools/record_policy/history.policy"
 # Comment rule (header): drop `#` lines; cut a lone ` # …` tail; keep a `#` inside a token (`### Heading`, `#123`).
 : > "$W/pol"; [ -f "$POL" ] && sed -E '/^[[:space:]]*#/d; s/[[:space:]]+#([[:space:]].*)?$//; s/[[:space:]]+$//; /^[[:space:]]*$/d' "$POL" > "$W/pol"
 pol() { awk -v k="$1" '$1 == k' "$W/pol"; }
-ARCHIVE_DIRS="docs/build/reports/ledger-archive $(pol archive | awk '{print $2}' | tr '\n' ' ')"
+ARCHIVE_DIRS="$BREL/reports/ledger-archive $(pol archive | awk '{print $2}' | tr '\n' ' ')"
 POL_AO="$(pol append-only | awk '{print $2}')"
 POL_PATHS="$(pol append-only | awk '{print $2}'; pol date | awk '{print $2}')"
 
 # ── Content accessors ───────────────────────────────────────────────────────
-at_base() { [ "$BASE" = "$EMPTY_TREE" ] && return 0; G show "$BASE:$1" 2>/dev/null; }
-at_head() { if [ "$MODE" = staged ]; then G show ":$1" 2>/dev/null; else G show "$HEADC:$1" 2>/dev/null; fi; }
+at_base() { [ "$BASE" = "$EMPTY_TREE" ] && return 0; G show "$BASE:./$1" 2>/dev/null; }
+at_head() { if [ "$MODE" = staged ]; then G show ":./$1" 2>/dev/null; else G show "$HEADC:./$1" 2>/dev/null; fi; }
 head_files() { if [ "$MODE" = staged ]; then G ls-files -- "$1"; else G ls-tree -r --name-only "$HEADC" -- "$1"; fi; }
 gdiff() {   # gdiff <options…> -- <paths…>
   local opts=() ; while [ $# -gt 0 ] && [ "$1" != "--" ]; do opts+=("$1"); shift; done
   [ "${1:-}" = "--" ] && shift
-  if [ "$MODE" = staged ]; then G diff --cached --no-renames --no-color ${opts[@]+"${opts[@]}"} "$BASE" -- "$@"
-  else G diff --no-renames --no-color ${opts[@]+"${opts[@]}"} "$BASE" "$HEADC" -- "$@"; fi
+  if [ "$MODE" = staged ]; then G diff --cached --relative --no-renames --no-color ${opts[@]+"${opts[@]}"} "$BASE" -- "$@"
+  else G diff --relative --no-renames --no-color ${opts[@]+"${opts[@]}"} "$BASE" "$HEADC" -- "$@"; fi
 }
 
-# Changed files under docs/ plus the policy paths (status \t path).
-PATHSPEC="docs"
+# Changed files under docs/ plus the policy paths (status \t path); a tickets/adr override outside docs/ joins.
+PATHSPEC="$DREL"
+for _d in "$BREL" "$TREL" "$AREL"; do case "$_d/" in "$DREL"/*) : ;; *) PATHSPEC="$PATHSPEC $_d" ;; esac; done
 gdiff --name-status -- $PATHSPEC 2>/dev/null > "$W/changed"
 if [ -n "$POL_PATHS" ]; then
   for g in $POL_PATHS; do gdiff --name-status -- ":(glob)$g" 2>/dev/null; done >> "$W/changed"
 fi
 sort -u -k2 "$W/changed" -o "$W/changed"
 
-MANIFEST_REL="docs/tickets/00_MANIFEST.md"
-LEDGER_REL="docs/build/LEDGER.md"
+MANIFEST_REL="$TREL/00_MANIFEST.md"
+LEDGER_REL="$BREL/LEDGER.md"
 
 # Executed contracts: tickets whose id has a BUILD_INDEX row at BASE.
-at_base docs/build/BUILD_INDEX.md > "$W/bi.base"
+at_base "$BREL/BUILD_INDEX.md" > "$W/bi.base"
 LC_ALL=C awk -F'|' '/^\|/ { for (i = 2; i < NF; i++) { c = $i; gsub(/[*`]/, "", c); gsub(/^[[:space:]]+|[[:space:]]+$/, "", c); sub(/[[:space:]].*$/, "", c); if (c ~ /^[A-Z][A-Z0-9.a-z-]*$/) print c } }' "$W/bi.base" | sort -u > "$W/executed"
 
 # The -U0 diff of one path as records:  R \t <base line> \t <text>   |   A \t <head line> \t <insert-after base line> \t <text>
@@ -290,17 +301,17 @@ while IFS="$(printf '\t')" read -r st path; do
   cls=""
   case "$path" in
     "$LEDGER_REL") cls=ledger ;;
-    docs/tickets/DEFERRALS.md) cls=deferrals ;;
-    docs/build/readouts/_TEMPLATE.md) cls="" ;;
-    docs/build/readouts/*.md) cls=readout ;;
-    docs/build/BUILD_INDEX.md) cls=index ;;
+    "$TREL/DEFERRALS.md") cls=deferrals ;;
+    "$BREL/readouts/_TEMPLATE.md") cls="" ;;
+    "$BREL"/readouts/*.md) cls=readout ;;
+    "$BREL/BUILD_INDEX.md") cls=index ;;
     "$MANIFEST_REL") cls=manifest ;;
-    docs/build/reports/digests/*.md) cls=digest ;;
-    docs/build/*.jsonl|docs/build/*/*.jsonl|docs/build/*/*/*.jsonl|docs/build/*/*/*/*.jsonl) cls=jsonl ;;
-    docs/build/runs/*.md|docs/build/pr/*.md) cls=runpr ;;
-    docs/adr/ADR-*.md) cls=adr ;;
-    docs/research-ledger.md|docs/build/planning/*.md|docs/build/planning/*/*.md) cls=planning ;;
-    docs/tickets/*.md)
+    "$BREL"/reports/digests/*.md) cls=digest ;;
+    "$BREL"/*.jsonl|"$BREL"/*/*.jsonl|"$BREL"/*/*/*.jsonl|"$BREL"/*/*/*/*.jsonl) cls=jsonl ;;
+    "$BREL"/runs/*.md|"$BREL"/pr/*.md) cls=runpr ;;
+    "$AREL"/ADR-*.md) cls=adr ;;
+    "$DREL/research-ledger.md"|"$BREL"/planning/*.md|"$BREL"/planning/*/*.md) cls=planning ;;
+    "$TREL"/*.md)
       tid="$(printf '%s' "$base_name" | sed -E 's/^[0-9]{2,3}[a-z]?_//; s/__.*$//; s/\.md$//')"
       grep -qxF "$tid" "$W/executed" && cls=contract ;;
   esac
@@ -531,7 +542,7 @@ while IFS="$(printf '\t')" read -r st path; do
           adr)
             if printf '%s' "$txt" | grep -qE 'Superseded by ADR-[0-9]+'; then
               sup="$(printf '%s' "$txt" | grep -oE 'ADR-[0-9]+' | head -1)"
-              head_files docs/adr | grep -qE "^docs/adr/${sup}-" \
+              head_files "$AREL" | grep -qE "^$AREL/${sup}-" \
                 || add V frozen "$path" "$hl" "" superseded-by "the superseding $sup does not exist (BM-ADR-01)"
               d="$(printf '%s' "$txt" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)"
               [ -n "$d" ] && printf '%s\t%s\tact\t%s\t%s\n' "$path" "$hl" "$d" "$txt" >> "$W/dates"
@@ -561,7 +572,7 @@ while IFS="$(printf '\t')" read -r st path; do
       ;;
     runpr)
       # a run ledger that was already closed at the base only gains lines (one honest closeout, BM-INDEX-02)
-      case "$path" in docs/build/runs/*)
+      case "$path" in "$BREL"/runs/*)
         at_base "$path" | run_closed && judge_append_only_file "$path" "$R" append-only ;;
       esac
       awk -F'\t' '$1 == "A" {print $2 "\t" $4}' "$R" | while IFS="$(printf '\t')" read -r hl txt; do
@@ -597,7 +608,7 @@ HEAD_T="$NOW_EPOCH"; HEAD_L="$NOW_ISO"; HEAD_SHA="staged"
 if [ "$MODE" != staged ]; then
   HEAD_T="$(G log -1 --format=%ct "$HEADC")"; HEAD_L="$(G log -1 --format=%cI "$HEADC")"; HEAD_SHA="$(G rev-parse --short "$HEADC")"
   RANGE="$HEADC"; [ "$BASE" != "$EMPTY_TREE" ] && RANGE="$BASE..$HEADC"
-  G log --reverse -p --no-renames --no-color -U0 --format='@@C %h %ct %cI' "$RANGE" -- docs $POL_PATHS 2>/dev/null | LC_ALL=C awk '
+  G log --reverse -p --relative --no-renames --no-color -U0 --format='@@C %h %ct %cI' "$RANGE" -- $PATHSPEC $POL_PATHS 2>/dev/null | LC_ALL=C awk '
     /^@@C / { sha = $2; ct = $3; ci = $4; next }
     /^\+\+\+ / { f = substr($0, 5); sub(/^b\//, "", f); next }
     /^\+/ && f != "" { print f "\t" sha "\t" ct "\t" ci "\t" substr($0, 2) }' > "$W/times"

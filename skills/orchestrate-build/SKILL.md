@@ -67,6 +67,13 @@ a terminal can execute. Only the *dispatch* step binds to harness capability.
   prints `mode=<committed|scratch>` and `root=<abs path>`. In **committed** mode the ledger is
   `<root>/LEDGER.md`, committed and travelling with the chain tip (a sibling worktree reads its own tip, not the
   main worktree's copy); in **scratch** mode it is the legacy gitignored ledger, unchanged.
+  **Monorepo subproject (BM-ROOT-03).** When the build memory lives under `<sub>/docs/build`, the operator sets
+  `BUILD_MEMORY_ROOT=<sub>/docs/build` (relative to the toplevel) in the harness's persistent env; every
+  `docs/build/…`, `docs/tickets/…`, `docs/adr/…` path in this skill then means `<root>/…`, `<root>/../tickets/…`,
+  `<root>/../adr/…`. Assert it before dispatch: `memory-root.sh` must print `mode=committed` and the expected
+  `root=` — a non-zero exit (unset with subproject memory present → 3; a missing dir → 2) is a stop, never a
+  reason to fall back to scratch. `drive-build.sh` exports the variable to every unit it starts (from the
+  ledger's position); a subagent or manual session must inherit it from the harness env.
 - **Orient within the budget (BM-ORIENT-01).** Never read `LEDGER.md`, `DEFERRALS.md` or `BUILD_INDEX.md`
   whole: read the ledger head (`sed -n '1,/^## OPEN FINDINGS/p'`, ≤ 12 KiB), the current RETURN PASS table, the
   last three PHASE LOG entries and the next row's manifest line + contract header (≤ 48 KiB in all), or the
@@ -235,7 +242,7 @@ reports a pushed PR + evidence report, **confirm** rather than advance:
    (BM-HIST-01: protected records only gained lines, at their ends, with dates from the clock).
 4. **CI truth (BM-CI-01).** Read the checks of this ticket's PR at its current head and of every still-open
    ancestor PR in the stack: `bash <skills>/orchestrate-build/scripts/ci-boundary.sh --ledger <ledger> --ticket
-   <ID> --stack --json <memoryRoot>/logs/ci-<ID>.json` (it runs a repo hook `docs/build/tools/ci_boundary.*`
+   <ID> --stack --json <memoryRoot>/logs/ci-<ID>.json` (it runs a repo hook `<memoryRoot>/tools/ci_boundary.*`
    instead when one exists, forwarding `--ledger`, `--interval`, `--max-wait`/`--no-wait` when the hook names them). Exit 0 → its last line (`ci: pass #<n>@<sha7> (…)`, or
    `ci: none-declared (locally-green)`) is the `ci:` field of the ticket's PHASE LOG `done` entry and run ledger
    — the worker writes it at close (`implement-spec` §6.5 step 0); confirm it, and add it in the reconcile below
@@ -244,10 +251,35 @@ reports a pushed PR + evidence report, **confirm** rather than advance:
    `blockedOn: CI <fail|pending|unknown> on #<n> (<check>): <first failing line>`, leave `nextTicket` unchanged,
    STOP. A red inherited from an ancestor PR blocks too, unless `GATE DECISIONS` holds the operator's
    verbatim `waiver` row naming that PR and check. A local-only result is `locally-green`, never "green".
-5. **External state.** Record `origin/<default>`'s head, whether the chain still descends from it
-   (`git merge-base --is-ancestor`), PRs merged since the previous boundary (who, when) and open PRs that are not
-   chain rows. An off-stack merge into the chain, or a chain PR rebased or retargeted by someone else →
-   `blockedOn` (the operator decides).
+5. **External state (BM-EXT-01).** `git fetch`, then `bash <skills>/orchestrate-build/scripts/external-state.sh
+   --ledger <ledger>` — it records `origin/<default>`'s head, whether the chain still descends from it, and names
+   what moved: `default-advanced` (informational — the chain is untouched), `chain-merged(<ids>)`,
+   `retargeted(#n: a → b)`, `rebased-onto-default(<b>)`, `default-merged-in(<b>)`, `bot-commits(<b>: …)`,
+   `unpushed(<b>)`, or a `chain-merged-partial`,
+   `default-rewritten`, `foreign-commits(<b>: …)`, `foreign-rewrite(<b>)` event. Also record PRs merged since the
+   previous boundary (who, when) and open PRs that are not chain rows. An off-stack merge into the chain, or a
+   chain PR rebased or retargeted by someone else → `blockedOn` (the operator decides) — the script's exit 3 and
+   its `blockedOn: external — …` line.
+   **Pre-authorized in-order operator merge.** When the operator will merge the chain's bottom PRs to the default
+   branch themselves, bottom-up — merge commit, **squash** or rebase — and then rebase or merge the default branch
+   into the remaining chain branch, record that once as a GATE DECISIONS row — the operator's words verbatim,
+   BM-GATE-05/09: `| <date -u> | * | external | ext:merge-in-order | "<words>" (<channel>) | <reading> · expires:
+   <ticket id or date> · voided-by: <what voids it> | pre-authorization |` — with `mergePolicy: OPERATOR` (or
+   `AUTO-BOTTOM-UP`). While it is live, `chain-merged`, `retargeted` (the next PR's base moved to the default
+   branch after its base row merged — read with `gh`), `rebased-onto-default` and `default-merged-in` read
+   `external: expected — … (pre-authorized: …)` (exit 0): not a `blockedOn`. A squash merge is recognized from
+   `gh pr view` when available, else from the squash commit's `(#<PR>)` subject or its patch-id; the remaining
+   branch may then drop the squashed row's own commits (`git rebase --onto <default> <old base> <branch>`).
+   Re-sync the build worktree's branch to the remote copy (`git reset --keep origin/<b>` on that branch) and
+   record a PHASE LOG `repair — external: <events> (pre-authorized <date>)` entry; `chainTip` names the branch,
+   so it follows. The rule never covers `foreign-commits`, `foreign-rewrite`, `chain-merged-partial` (an
+   out-of-order or partial merge), `default-rewritten`, a retarget anywhere else, or an expired or voided row.
+   **Pre-authorized bot commits.** When a tool account pushes to chain branches (a formatter, a bot that merges
+   the default branch in), the operator may accept it with a row naming `ext:bot-commits <author-ERE>[, …]`
+   (e.g. `ext:bot-commits ci-format-bot`), optionally with `paths: <glob>[, …]` in the consequence cell.
+   A matching author's commit is then `bot-commits(<b>: …)`, expected, when it only merges the default branch
+   in, only changes whitespace, or only touches those paths; anything else it pushes is still
+   `foreign-commits`. No author is accepted without the row, and there is no default author list.
 If any of 1–3 is missing (an older worker, a scratch-mode run, or an interruption), repair it as a PHASE LOG
 `repair` entry that names the gap (`repair — close: <which item> (<worker harness>, why)`), then re-run the
 validator. Never back-fill a `done` entry for work you did not verify. A second close repair in the same round
@@ -321,8 +353,9 @@ For a **legacy** ledger with `nextTicket: CAPSTONE`, see §0's routing and
   `bash <skills>/orchestrate-build/scripts/digest.sh --ledger <ledger> --trigger <why> --write --production
   "<what you read, what you found>" --spend "<figure + source | not tracked>" --usage "<runs; usage per run
   (median, max); cumulative; projection; usage-limit events | not measured>"` and show the result. It appends
-  to `docs/build/reports/digests/<date -u +%F>.md` and reads the rest itself (harness, state, validator, the CI
-  of every open chain PR, merges by anyone since the last digest, owed human work). Never a secret value: if one
+  to `<memoryRoot>/reports/digests/<date -u +%F>.md` and reads the rest itself (harness, state, validator, the CI
+  of every open chain PR, merges by anyone since the last digest, the external-state verdict on the default
+  branch, owed human work). Never a secret value: if one
   appeared in the transcript, pass `--exposed yes` and stop for rotation.
 - **Stop and ask** — set `blockedOn` or pause, never proceed — when: a required check is red; production
   contradicts a record; a date is not from the clock; operator words are tentative or delegate a signature; a
@@ -355,6 +388,13 @@ non-interactive prompt mode, otherwise the `manual` tier. For `manual`, `drive-b
 exact fresh-session prompt for the next unit without dispatching anything: start **one new session** with it,
 let it run that unit and stop, then re-run `--print-prompt`. Never continue a finished unit's session into the
 next ticket.
+
+**A memory root in a monorepo subproject (BM-ROOT-03).** `drive-build.sh` reads it from the ledger's position
+(`--ledger <toplevel>/<sub>/docs/build/LEDGER.md`), exports `BUILD_MEMORY_ROOT=<sub>/docs/build` to every unit and
+names it in the prompt; an operator-set value is kept. An `--agent-cmd` runs in that environment, so
+`--agent-cmd "claude -p --permission-mode acceptEdits"` needs nothing extra; a wrapper that clears the environment
+must pass it on (`env BUILD_MEMORY_ROOT=<sub>/docs/build …`). `subagent` and `manual` sessions inherit it only from
+the harness's persistent env (e.g. `.claude/settings.local.json` `"env"`).
 
 Full autonomy needs *some* external initiator (a subagent primitive OR a headless CLI); on IDE-only agents with
 neither, the honest answer is the `manual` floor — that is a capability limit of the harness, not a defect of the

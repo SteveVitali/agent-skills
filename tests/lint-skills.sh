@@ -76,7 +76,18 @@ present 'a `#` inside a token is kept' 'the history.policy comment rule (0.5.1)'
 present 'a hook that names none gets exactly the two' 'the ci_boundary hook flag forwarding (0.5.1)' "$LAY"
 present 'forwarding `--ledger`, `--interval`, `--max-wait`/`--no-wait` when the hook names them' 'the hook flag forwarding at the boundary (0.5.1)' "$OB"
 present 'A report that cannot be written exits 2.' 'the unwritable-report exit (0.5.1)' "$LAY"
-for id in BM-CI-01 BM-GATE-05 BM-GATE-06 BM-GATE-07 BM-GATE-08 BM-GATE-09 BM-PROD-01 BM-HARNESS-01 BM-ORIENT-01 BM-TEST-01 BM-DIGEST-01 BM-HIST-01; do
+# 0.5.4 — a memory root in a monorepo subproject (BM-ROOT-03) and the external-state operating rule (BM-EXT-01).
+present '**A memory root in a monorepo subproject (BM-ROOT-03).**' 'the subproject memory root (0.5.4)' "$LAY"
+present 'Assert it before dispatch: `memory-root.sh` must print `mode=committed`' 'the memory-root SETUP assertion (0.5.4)' "$OB"
+present '**Pre-authorized in-order operator merge.**' 'the ext:merge-in-order operating rule (0.5.4)' "$OB"
+present 'scripts/external-state.sh' 'the external-state read at the boundary (0.5.4)' "$OB"
+present '**Pre-authorized bot commits.**' 'the ext:bot-commits operating rule (0.5.4)' "$OB"
+present 'there is no default author list' 'no default bot authors (0.5.4)' "$OB"
+present 'git add "$M/LEDGER.md" "$M/BUILD_INDEX.md" "$M/runs/<ID>.md"' 'the memory-root closeout git add (0.5.4)' "$IS"
+present '**`docs/` is the docs root (BM-ROOT-03).**' 'the synthesize-spec docs root (0.5.4)' "$S/synthesize-spec/SKILL.md"
+present '**Where `docs/` is (BM-ROOT-03).**' 'the decompose-spec seed paths (0.5.4)' "$S/decompose-spec/SKILL.md"
+retired 'git add docs/build/LEDGER.md docs/build/BUILD_INDEX.md' 'a literal docs/build closeout git add — 0.5.4' "$IS"
+for id in BM-CI-01 BM-GATE-05 BM-GATE-06 BM-GATE-07 BM-GATE-08 BM-GATE-09 BM-PROD-01 BM-HARNESS-01 BM-ORIENT-01 BM-TEST-01 BM-DIGEST-01 BM-HIST-01 BM-ROOT-03 BM-EXT-01; do
   grep -qE "\(${id}\)|\(${id}," "$LAY" || fail "layout.md does not define $id"
 done
 grep -qE '^\| BM-[A-Z]+-[0-9]+ \|' "$LAY" && fail "layout.md still lists a rule in a 'cited before their full text lands' table"

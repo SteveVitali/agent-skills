@@ -48,6 +48,10 @@ text in this file (0.5.0 applied the last of the SK-01…SK-25 proposals); the h
 │       └── BACKLOG.csv · BACKLOG.md · TICKET_VS_SPEC.md · SPEC_RECONCILIATION_PLAN.md · INTEGRATION_PLAN.md · OPERATIONAL_READINESS.md
 ```
 
+`<repo>/` is the project dir: the git toplevel in a single-repo layout, or a monorepo subproject
+whose `<memory root>` is selected with `BUILD_MEMORY_ROOT` (§ The memory root, BM-ROOT-03); every
+`docs/…` path in this contract is relative to it.
+
 The named entries above are the **only** allowed entries at the root of `docs/build/`; the
 validator flags anything else (BM-LAYOUT-01). `docs/build/logs/` is the one gitignored
 subtree, by a checked-in `docs/build/logs/.gitignore` containing `*` and `!.gitignore`
@@ -99,20 +103,65 @@ the source named. Never a remembered, inferred or "chain" date.
 
 ---
 
-## The memory root (BM-ROOT-01, BM-ROOT-02)
+## The memory root (BM-ROOT-01, BM-ROOT-02, BM-ROOT-03)
 
-`scripts/memory-root.sh [worktree]` prints two lines — `mode=<committed|scratch>` and
-`root=<absolute path>` — resolved as:
+`scripts/memory-root.sh [--paths] [--allow-missing] [worktree]` prints two lines —
+`mode=<committed|scratch>` and `root=<absolute path>` — resolved as:
 
-1. `$BUILD_MEMORY_ROOT` if set → `committed`, that path.
+1. `$BUILD_MEMORY_ROOT` if set → `committed`, that path. A relative value resolves against the
+   worktree **toplevel** (never the cwd). A value naming a missing dir is an error (exit 2), never a
+   fallback; `build-memory init` and pre-init planning pass `--allow-missing`.
 2. `<worktree toplevel>/docs/build` if its `README.md` contains `<!-- build-memory: v2 -->`
    → `committed`.
 3. otherwise `scratch`, `root=${AGENT_SCRATCH_DIR:-<parent of git-common-dir>/.agents/scratch}`
-   (today's rule, unchanged).
+   (today's rule, unchanged) — stated on stderr. When `AGENT_SCRATCH_DIR` is unset and the
+   worktree tracks a `<sub>/docs/build/README.md` carrying the marker (a subproject's build
+   memory; paths under `tests/` or `fixtures/` are fixtures and do not count), it is an error
+   (exit 3) naming `<sub>/docs/build` instead of a silent scratch root.
 
 Every build skill obtains the root from this script. Resolution always uses the **current
 worktree**, so a sibling build worktree reads the ledger on its own chain tip, never the
 main worktree's copy (BM-ROOT-02 — the sibling-worktree defect ADR-058 records).
+
+**A memory root in a monorepo subproject (BM-ROOT-03).** The tree above is drawn at `<repo>/`;
+it may instead sit under a subproject, e.g. `<toplevel>/packages/app/docs/{build,tickets,adr}`.
+Select it with `BUILD_MEMORY_ROOT=packages/app/docs/build` — **relative**, so each worktree
+resolves its own copy (an absolute value pins every worktree to one checkout). Everything is
+derived from the one root, by `scripts/bm-paths.sh` (sourced by every script that touches the tree):
+
+| name | derived as | standard layout |
+|---|---|---|
+| `<memory root>` | `$BUILD_MEMORY_ROOT`, else `<toplevel>/docs/build` | `docs/build` |
+| `<docs root>` | the memory root's parent | `docs` |
+| `<project dir>` | the docs root's parent | the toplevel |
+| tickets | `$BUILD_MEMORY_TICKETS`, else `<docs root>/tickets` | `docs/tickets` |
+| ADRs | `$BUILD_MEMORY_ADR`, else `<docs root>/adr` | `docs/adr` |
+
+- Wherever a skill or this contract writes `docs/build/…`, `docs/tickets/…`, `docs/adr/…` or
+  `docs/…` (the synthesize-spec planning files: `research-ledger.md`, `research/`, `design/`, the
+  spec, `decomposition-prompt.md`), read `<memory root>/…`, tickets, ADRs, `<docs root>/…`. With
+  `BUILD_MEMORY_ROOT` unset they are those literal paths, byte-for-byte as before.
+  `memory-root.sh --paths` prints them (`project=`, `docs=`, `tickets=`, `adr=`); `--allow-missing`
+  resolves them before `init` creates the root.
+- The tickets and ADR overrides resolve like the root and must lie under the project dir.
+- The validator (`check-build-memory.sh`, tree, history and `--planning` modes) picks the root by:
+  `--memory-root DIR`; else an explicit `repo_root` that has `docs/build` (e.g.
+  `check-build-memory.sh packages/app`); else `$BUILD_MEMORY_ROOT`; else
+  `<repo_root | toplevel>/docs/build`. Its labels (`docs/tickets/DEFERRALS.md`, `runs/T1.md`) are
+  relative to the project dir. From the toplevel without the root it exits 2 and names the
+  subproject root on stderr.
+- Ledger values that are paths (`manifest:`, `canonicalSpec:`, `memoryRoot:`, a backticked path in
+  the orient region) may be written relative to the project dir or to the worktree toplevel; both
+  resolve. A toplevel-relative value (`packages/app/docs/tickets/00_MANIFEST.md`) is what an
+  agent working from the toplevel can open directly — prefer it in a subproject.
+- `orchestrate-build` scripts read the root from the committed ledger's own position (a `--ledger`
+  under `<sub>/docs/build`): `ci-boundary.sh` looks for `ci_required.txt` and the repo hook under it,
+  `digest.sh` validates it and reads its DEFERRALS, and `drive-build.sh` exports
+  `BUILD_MEMORY_ROOT=<sub>/docs/build` to every unit and names it in the prompt.
+- Environments do not persist across a harness's tool calls or subagents unless exported by the
+  harness: set `BUILD_MEMORY_ROOT` in the harness's persistent env (e.g. `.claude/settings.local.json`
+  `"env"`) and in any `drive-build --agent-cmd` wrapper; `memory-root.sh` failing loudly is the
+  backstop, not the mechanism.
 
 ---
 
@@ -490,6 +539,36 @@ does it mechanically, `--print-prompt` for the `manual` tier).
   head, whether the chain still descends from it, PRs merged since the last boundary (who,
   when), open PRs that are not chain rows. An off-stack merge into the chain, or a chain PR
   rebased or retargeted by someone else, is a `blockedOn` for the operator.
+- **External state is classified, and two operator-accepted kinds of event can be pre-authorized
+  (BM-EXT-01).** `orchestrate-build/scripts/external-state.sh --ledger <ledger>` (git, plus `gh`
+  when available; fetch first) names each event: `default-advanced` (the default branch moved and
+  no chain row is newly merged — informational, the chain is untouched), `chain-merged(<ids>)` (a
+  bottom prefix of the chain merged into the default branch — by merge commit, squash or rebase:
+  `gh pr view` says MERGED, the row's tip is on the default branch, a first-parent commit's subject
+  ends in `(#<row PR>)` or its patch-id equals the row's whole diff, or every row commit has a
+  patch-equivalent), `retargeted(#n: a → b)` (an open chain PR's base changed; read with `gh`),
+  `rebased-onto-default(<b>)` / `default-merged-in(<b>)` (a chain branch's remote copy is the
+  local one rebased onto, or merged with, the default branch; a squash-merged row's own commits may
+  be dropped), `bot-commits(<b>: …)`, `unpushed(<b>)` (informational), and the always-blocking
+  `chain-merged-partial`, `default-rewritten`, `foreign-commits(<b>: …)` (a commit on a chain
+  branch that is neither the default branch's, a patch-equivalent, a merge of it, nor an accepted
+  bot commit) and `foreign-rewrite(<b>)`. A merged row stops being an event once the chain contains
+  the commit that brought it into the default branch.
+  - `chain-merged`, `retargeted` (to the default branch, after its base row merged),
+    `rebased-onto-default` and `default-merged-in` are a `blockedOn` unless a live GATE DECISIONS
+    `pre-authorization` row names the item `ext:merge-in-order` and `mergePolicy` is `OPERATOR` or
+    `AUTO-BOTTOM-UP`.
+  - `bot-commits` exist only under a live row naming `ext:bot-commits <author-ERE>[, …]` (matched
+    against `<name> <<email>>`): a matching author's commit is accepted when it only merges the default
+    branch in, changes whitespace only, or touches only the row's `paths: <glob>[, …]`. Any other
+    commit — or every bot commit without the row — is `foreign-commits`. No author is accepted by
+    default.
+  - Each row carries the operator's words verbatim, `expires:` (a ticket id or a date) and
+    `voided-by:` (BM-GATE-09); it lapses when its ticket lands or its date passes, or a later
+    `correction` row voids it. An accepted event is `expected`: recorded (a PHASE LOG
+    `repair — external: <events> (pre-authorized <date>)` entry when the build worktree's branch is
+    re-synced to the remote copy), never a block. `digest.sh` prints the same verdict on its
+    default-branch line.
 
 **No out-of-ticket production changes (BM-PROD-01).** A production mutation — a deploy, a job
 execution, a scheduler / database / bucket / IAM / instance change, a publish — runs only inside

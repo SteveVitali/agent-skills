@@ -3,6 +3,109 @@
 All notable changes to agent-skills are recorded here. Versioning is the plugin version in
 `.claude-plugin/plugin.json`.
 
+## 0.5.4 — build memory in a monorepo subproject (`BUILD_MEMORY_ROOT`); a loud memory root; the external-state read and its pre-authorizable operator and bot events
+
+A patch release for one defect class and two operating rules, found planning a build whose memory lives in a
+monorepo subproject (e.g. `packages/app/docs/{build,tickets,adr}`). **Backward-compatible:** with
+`BUILD_MEMORY_ROOT` unset and a single-repo layout every script prints and writes exactly what 0.5.3 did — the
+validator's tree and history reports (human lines and JSON, input digest included) were compared byte-for-byte on
+every `v2-*` fixture. The behaviour notes below list every case where an output can differ.
+
+### Fixes
+1. **`BUILD_MEMORY_ROOT` is honoured everywhere, not only by `memory-root.sh`** (BM-ROOT-03). 0.5.3 resolved the
+   variable in `memory-root.sh` alone; `check-build-memory.sh` hard-coded `<repo>/docs/{build,tickets,adr}`
+   and exited 2 ("not a build-memory repo") from a monorepo toplevel, and so did its history mode;
+   `digest.sh` validated the toplevel and read `<toplevel>/docs/tickets/DEFERRALS.md`; `ci-boundary.sh` looked for
+   `ci_required.txt` and the repo hook only at `<worktree>/docs/build/tools`; implement-spec 6.5 told the worker to
+   `git add docs/build/…`. A new sourced helper, `build-memory/scripts/bm-paths.sh`, derives everything from one
+   root: `<docs root>` = its parent, `<project dir>` = the docs root's parent, tickets = `<docs root>/tickets` and
+   ADRs = `<docs root>/adr` (`BUILD_MEMORY_TICKETS` / `BUILD_MEMORY_ADR` override, under the project dir).
+   - `check-build-memory.sh` (tree, `--range` / `--staged` / `--first-parent`, `--planning`) picks the root by
+     `--memory-root DIR`, else an explicit `repo_root` that has `docs/build` (e.g. `check-build-memory.sh
+     packages/app`), else `$BUILD_MEMORY_ROOT`, else the 0.5.3 rule. Labels stay project-relative
+     (`docs/tickets/DEFERRALS.md`). `check-history.sh` runs git in the project dir with `git diff --relative`
+     and `<rev>:./<path>`, and the guards-marker "created after" read uses `git log --relative`.
+   - Ledger path values (`manifest:`, `canonicalSpec:`, orient-region paths) resolve project-relative **or**
+     toplevel-relative, so `manifest: packages/app/docs/tickets/00_MANIFEST.md` is not "stale orient text".
+   - `--planning docs/research-ledger.md` resolves under the docs root, also before the memory root exists.
+   - `digest.sh`, `ci-boundary.sh` and `drive-build.sh` read the root from the committed ledger's own position
+     (`<sub>/docs/build/LEDGER.md`); `ci-boundary.sh` without `--ledger` uses `BUILD_MEMORY_ROOT`. `drive-build.sh`
+     exports `BUILD_MEMORY_ROOT=<sub>/docs/build` (toplevel-relative) to every unit and names it in the prompt;
+     an operator-set value is kept.
+   - `migrate-legacy-scratch.sh --to` and `reconcile-build/scripts/check-backlog.sh`'s defaults follow the variable.
+2. **`memory-root.sh` never falls back silently.** A `BUILD_MEMORY_ROOT` naming a missing dir exits 2
+   (`--allow-missing` for `init` and pre-init planning) instead of printing it; a relative value resolves against
+   the worktree toplevel, not the cwd. With the variable unset, a worktree that tracks a subproject's
+   `<sub>/docs/build/README.md` marker (outside `tests/` / `fixtures/`) exits 3 naming it, where 0.5.3 printed the
+   toplevel's (possibly stray) `.agents/scratch`; `AGENT_SCRATCH_DIR` still chooses scratch explicitly. Scratch
+   mode is stated on stderr. `--paths` adds `project=`, `docs=`, `tickets=`, `adr=`. The validator run from the
+   toplevel without the root prints the same hint on stderr (still exit 2).
+
+### New
+3. **`orchestrate-build/scripts/external-state.sh`** (BM-EXT-01) — the §2.3 step-5 read, mechanized (git; `gh`
+   when available, `--no-gh` to forbid it): `default-advanced` (informational — in a busy monorepo the default
+   branch always moves), `chain-merged(<ids>)`, `retargeted(#n: a → b)`, `rebased-onto-default(<b>)`,
+   `default-merged-in(<b>)`, `bot-commits(<b>: …)`, `unpushed(<b>)`, and the always-blocking
+   `chain-merged-partial`, `default-rewritten`, `foreign-commits(<b>: …)`, `foreign-rewrite(<b>)`. Exit 0 clean /
+   informational / expected, 3 `blockedOn: external — …`, 5 unknown.
+   - A row counts as merged by merge commit, **squash** or rebase: `gh pr view <n> --json
+     state,mergedAt,mergeCommit,headRefName,headRefOid,baseRefName` says MERGED; else the row's tip is on the
+     default branch; else a first-parent commit since the merge-base has the subject suffix `(#<row PR>)` or the
+     patch-id of the row's whole diff; else every row commit has a patch-equivalent. A merged row stops being an
+     event once the chain contains the commit that brought it in, and a squash-merged row's own commits may be
+     dropped from the rebased remainder without reading as a foreign rewrite.
+   - PR retargets are read with `gh` (an open chain PR whose base is no longer the BUILD_INDEX `base` cell).
+4. **Two pre-authorizable events** (GATE DECISIONS `pre-authorization` rows: operator words verbatim, `expires:`
+   a ticket or date, `voided-by:`; BM-GATE-09; lapsed when the ticket lands, the date passes or a later
+   `correction` row voids it):
+   - `ext:merge-in-order` (with `mergePolicy: OPERATOR | AUTO-BOTTOM-UP`) turns `chain-merged`, a retarget to the
+     default branch after the base row merged, `rebased-onto-default` and `default-merged-in` from a
+     `blockedOn` into `external: expected — …`.
+   - `ext:bot-commits <author-ERE>[, …]` (optional `paths: <glob>[, …]`) accepts a matching author's commits on a
+     chain branch when each one only merges the default branch in, only changes whitespace, or only touches the
+     listed paths. Without the row — and for any other commit — they stay `foreign-commits`. No author is
+     accepted by default; docs and tests use the neutral `ci-format-bot`.
+   - Never pre-authorizable: a partial or out-of-order merge, a rewritten default branch, a retarget elsewhere,
+     a foreign commit or a dropped local commit. orchestrate-build §2.3 step 5 documents both rows, the re-sync
+     of the build branch and the PHASE LOG `repair — external:` entry.
+
+### Behaviour notes (where an output can differ from 0.5.3)
+- `memory-root.sh`: exit 2 for a missing `BUILD_MEMORY_ROOT` (was: printed it), exit 3 for an implicit scratch
+  root over subproject build memory, a stderr line in scratch mode, a relative value resolved against the toplevel
+  (was: the cwd). An absolute value is printed as given, as before.
+- `digest.sh`'s default-branch line appends the external-state event when the chain does not descend from the
+  default branch (and reads `NO — external: …` for an informational or pre-authorized event); when the chain does
+  descend it is unchanged unless a chain branch's remote copy carries a block event, which is appended.
+- `drive-build.sh`'s prompt and header gain one sentence/line only when the memory root is not
+  `<toplevel>/docs/build` or `BUILD_MEMORY_ROOT` is set.
+
+### Docs and tests
+- `layout.md` § The memory root (BM-ROOT-03: the derivation table; `docs/…` means the same path under the
+  subproject) and § CI and production at the boundary (BM-EXT-01); build-memory SKILL (resolve, `check`, `init`),
+  implement-spec §0/§6.5 (`<memoryRoot>`; `git add "$M/…"` from `memory-root.sh`), decompose-spec Phase 5 (seed
+  under the subproject, toplevel-relative ledger paths), orchestrate-build §0 (assert `mode=committed` + the
+  expected `root=` before dispatch), §2.3 step 5 (both rows), Dispatch (`--agent-cmd` and env), synthesize-spec
+  (`docs/` is the docs root), reconcile-build orient; the AGENTS.md section template notes the subproject form.
+- New fixture `skills/build-memory/tests/v2-monorepo` (a monorepo root with its own `docs/`, build memory under
+  `sub/proj/docs/`, toplevel-relative ledger paths) and `test_monorepo`: memory-root (unset → 3, missing → 2,
+  `--paths`, overrides, cwd independence), the validator from every spelling, `v2-violations` and
+  `v2-guards-violations` under `sub/proj` reporting exactly the flat diagnostics, `--staged` / `--range` with
+  project-relative labels, the guards-marker history read, and `--planning` before the root exists — every
+  assertion fails against 0.5.3. `test_memory_root` asserts the missing-dir error.
+- `skills/orchestrate-build/tests/run-tests.sh`: `test_monorepo` (ci-boundary required set and hook under the
+  subproject, digest validator verdict equal to the flat layout's, drive-build exporting the root to every unit)
+  and `test_external_state` (local bare-repo origins and the stub `gh`): clean, default-advanced, the bottom
+  merge with and without the rule, an expired row, `mergePolicy: NONE`, the operator's rebase, a foreign commit,
+  a merge of main into the chain branch; squash merges by subject + patch-id and by patch-id alone, the
+  `rebase --onto` remainder, re-sync and later integration, an out-of-order squash; `gh` merged state, a retarget
+  to the default branch and one elsewhere, `--no-gh`; bot commits (none without the row, whitespace-only, a
+  behaviour change, a merge of main, an allow-listed path); and the digest line for each verdict.
+- `skills/reconcile-build/tests/run-tests.sh`: `check-backlog.sh` defaults under `BUILD_MEMORY_ROOT`.
+- The three self-tests unset `BUILD_MEMORY_ROOT` / `BUILD_MEMORY_TICKETS` / `BUILD_MEMORY_ADR` /
+  `AGENT_SCRATCH_DIR` first, so an operator's exported monorepo setting cannot leak in.
+- `tests/lint-skills.sh`: BM-ROOT-03 and BM-EXT-01 must be defined in `layout.md`; the new rules must be present;
+  a literal `git add docs/build/LEDGER.md docs/build/BUILD_INDEX.md` closeout is retired.
+
 ## 0.5.3 — build-memory exempts GATE-ACCEPT from the passed-gate check; agent-docs scans `docs/build/`, skips `.claude/`
 
 A patch release for two false positives. **Backward-compatible:** both checks only report fewer false findings; a real

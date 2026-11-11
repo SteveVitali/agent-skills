@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # run-tests.sh — self-test for orchestrate-build's scripts: ci-boundary.sh (SK-01), drive-build.sh's
-# status-enum guard, CI gate, --print-prompt (SK-02) and harness line (SK-04), and digest.sh (SK-08). No network: a stub `gh` (stub-gh.sh) answers
+# status-enum guard, CI gate, --print-prompt (SK-02) and harness line (SK-04), digest.sh (SK-08), a monorepo memory
+# root (BM-ROOT-03) and external-state.sh (local bare-repo origins). No network: a stub `gh` (stub-gh.sh) answers
 # from canned files and a stub agent CLI (stub-agent.sh) closes one ticket per call.
 #
 # Usage:   run-tests.sh
@@ -12,6 +13,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS="$(cd "$HERE/../scripts" && pwd)"
 CIB="$SCRIPTS/ci-boundary.sh" ; DRIVE="$SCRIPTS/drive-build.sh"
 FAIL=0
+# Hermetic: an operator's exported memory-root settings (e.g. a monorepo's BUILD_MEMORY_ROOT) must not leak in.
+unset BUILD_MEMORY_ROOT BUILD_MEMORY_TICKETS BUILD_MEMORY_ADR AGENT_SCRATCH_DIR
 say()  { printf '%s\n' "$*"; }
 fail() { printf '  ✗ %s\n' "$*"; FAIL=1; }
 T="$(printf '\t')"
@@ -365,10 +368,175 @@ test_digest() {
   [ "$FAIL" -eq "$ok_before" ] && say "PASS digest"
 }
 
+# ── monorepo memory root (0.5.4, BM-ROOT-03): the ledger lives in sub/proj/docs/build ─────────────
+mkmono() {   # mkmono [noci] — mkrepo with its docs/ moved under sub/proj (the CI files stay at the toplevel)
+  local W; W="$(mkrepo "${1:-}")"; mkdir -p "$W/sub/proj"; mv "$W/docs" "$W/sub/proj/docs"; printf '%s' "$W"
+}
+test_monorepo() {
+  local W L F ok_before=$FAIL DG="$SCRIPTS/digest.sh" A B
+  # ci-boundary: the required set and the repo hook are read under the ledger's own memory root
+  W="$(mkmono)"; L="$W/sub/proj/docs/build/LEDGER.md"; green_stack
+  checks 7 "" "python${T}pass${T}$(run_url 71)${T}${T}CI" "web${T}fail${T}$(run_url 72)${T}flaky${T}CI"
+  mkdir -p "$W/sub/proj/docs/build/tools/record_policy"; printf 'python\n' > "$W/sub/proj/docs/build/tools/record_policy/ci_required.txt"
+  cib 0 "monorepo required set" --pr 7 --ledger "$L" --no-wait && \
+    { printf '%s' "$LAST" | grep -qF "ci: pass #7@" || fail "ci-boundary monorepo required set: last line '$LAST'"; }
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$W/sub/proj/docs/build/tools/ci_boundary.sh"
+  cib 0 "monorepo hook" --pr 7 --ledger "$L" --no-wait && \
+    { printf '%s' "$OUT" | grep -qF "delegating to the repo hook sub/proj/docs/build/tools/ci_boundary.sh" || fail "ci-boundary monorepo hook: not delegated"; }
+  rm -f "$W/sub/proj/docs/build/tools/ci_boundary.sh"
+  ( cd "$W" && BUILD_MEMORY_ROOT=sub/proj/docs/build PATH="$STUBPATH" bash "$CIB" --pr 7 --no-wait >/dev/null 2>&1 ) \
+    || fail "ci-boundary monorepo: BUILD_MEMORY_ROOT (no --ledger) did not find the required set"
+
+  # digest: the validator runs on the subproject (same verdict as the flat layout) and DEFERRALS is read there
+  for v in flat mono; do
+    if [ "$v" = flat ]; then W="$(mkrepo)"; F="$W/docs"; else W="$(mkmono)"; F="$W/sub/proj/docs"; fi
+    newstub; mkdir -p "$F/tickets"
+    printf '| id | item | why deferred | unblocked by | how to verify | proxy now | kind | status |\n|---|---|---|---|---|---|---|---|\n| D-T1-9 | sign the venue contract | operator only | owner: the operator · trigger: 2026-10-08 | readout | none | P | OPEN |\n' > "$F/tickets/DEFERRALS.md"
+    OUT="$(PATH="$STUBPATH" bash "$DG" --ledger "$F/build/LEDGER.md" 2>&1)"
+    printf '%s' "$OUT" | grep -qF "D-T1-9 — sign the venue contract" || fail "digest $v: DEFERRALS row not read"
+    if [ "$v" = flat ]; then A="$(printf '%s\n' "$OUT" | grep -F '**Validator:**')"; else B="$(printf '%s\n' "$OUT" | grep -F '**Validator:**')"; fi
+  done
+  [ -n "$A" ] && [ "$A" = "$B" ] || fail "digest monorepo: validator line '$B' differs from the flat layout's '$A'"
+  printf '%s' "$B" | grep -qF "exit 2" && fail "digest monorepo: the validator did not find the subproject memory root"
+
+  # drive-build: the subproject root is exported to every unit and named in the prompt; the flat prompt is unchanged
+  W="$(mkmono)"; L="$W/sub/proj/docs/build/LEDGER.md"; green_stack
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${BUILD_MEMORY_ROOT:-<unset>}" >> "%s/env.seen"\nexec bash "%s/stub-agent.sh" "$@"\n' "$W" "$HERE" > "$W/agent.sh"
+  OUT="$(STUB_LEDGER="$L" PATH="$STUBPATH" bash "$DRIVE" --ledger "$L" --agent-cmd "bash $W/agent.sh" --worktree "$W" \
+         --ci-interval 1 --ci-max-wait 0 --max-iters 6 2>&1)" || fail "drive-build monorepo: exit=$? — $(printf '%s' "$OUT" | tail -1)"
+  [ "$(sort -u "$W/env.seen" 2>/dev/null)" = "sub/proj/docs/build" ] || fail "drive-build monorepo: units saw BUILD_MEMORY_ROOT='$(sort -u "$W/env.seen" 2>/dev/null | tr '\n' ' ')'"
+  printf '%s' "$OUT" | grep -qF "memory root=sub/proj/docs/build (BUILD_MEMORY_ROOT, exported to every unit)" || fail "drive-build monorepo: header lacks the memory root"
+  grep -qF "The build memory root is 'sub/proj/docs/build'" "$L.prompt" 2>/dev/null || fail "drive-build monorepo: prompt does not name the memory root"
+  W="$(mkrepo)"; green_stack; drive 0 flat-prompt "$W"
+  grep -qF "The build memory root is" "$W/docs/build/LEDGER.md.prompt" && fail "drive-build: the flat-layout prompt changed"
+  [ "$FAIL" -eq "$ok_before" ] && say "PASS monorepo"
+}
+
+# ── external-state.sh: what moved outside the loop, and the ext:merge-in-order operating rule ─────
+gx() { git -c user.email=op@x -c user.name=operator "$@" >/dev/null 2>&1; }
+xs() {   # xs <expected exit> <label> [keyword…] — run external-state on $X (worktree) / $XL (ledger)
+  local want="$1" label="$2" kw; shift 2
+  OUT="$(PATH="$STUBPATH" bash "$SCRIPTS/external-state.sh" --ledger "$XL" --worktree "$X" --now 2026-11-11T12:00:00Z 2>&1)"; RC=$?
+  [ "$RC" -eq "$want" ] || { fail "external-state $label: exit=$RC (want $want) — $(printf '%s' "$OUT" | tail -1)"; return; }
+  for kw in "$@"; do printf '%s' "$OUT" | grep -qF -- "$kw" || fail "external-state $label: output lacks '$kw' — $(printf '%s' "$OUT" | tail -1)"; done
+}
+mkchain() {   # a bare origin, the build clone $X (main → demo/T1 → demo/T2, pushed), an operator clone $OP, a ledger $XL
+  local D; D="$(mktemp -d)"; git init -q --bare "$D/origin.git"; git -C "$D/origin.git" symbolic-ref HEAD refs/heads/main
+  X="$D/build"; gx clone "$D/origin.git" "$X"; ( cd "$X" && git checkout -q -b main && echo base > f && gx add f && gx commit -m base && gx push -u origin main )
+  ( cd "$X" && git checkout -q -b demo/T1 && echo t1 > t1 && gx add t1 && gx commit -m T1 && git checkout -q -b demo/T2 && echo t2 > t2 && gx add t2 && gx commit -m T2 \
+    && gx push origin demo/T1 demo/T2 && gx remote set-head origin main )
+  OP="$D/op"; gx clone "$D/origin.git" "$OP"
+  mkdir -p "$D/mem"; XL="$D/mem/LEDGER.md"
+  printf '# Build ledger\n\n## CURRENT STATE\n\n```\nlastCompleted:   T2\nchainTip:        demo/T2\npinnedBaseSha:   %s\nmergePolicy:     OPERATOR\n```\n\n## GATE DECISIONS\n\n| date | ticket | gate | item | answer (verbatim) | consequence | kind |\n|---|---|---|---|---|---|---|\n\n## PHASE LOG — Round 1\n' "$(git -C "$X" rev-parse main)" > "$XL"
+  printf '| seq | ticket | kind | branch | PR | base |\n|---|---|---|---|---|---|\n| 1 | T1 | ticket | demo/T1 | #7 | main |\n| 2 | T2 | ticket | demo/T2 | #8 | demo/T1 |\n' > "$D/mem/BUILD_INDEX.md"
+  newstub   # the stub gh answers only the view-<n> files a case writes; otherwise git alone decides
+}
+botrow() {   # botrow <author-ERE list> [paths] — append an ext:bot-commits pre-authorization row
+  awk -v a="$1" -v p="${2:-}" '{print} /^\|---\|---\|---\|---\|---\|---\|---\|$/ {print "| 2026-11-11T10:00:00Z | * | external | ext:bot-commits " a " | \"the formatter bot may push to chain branches\" (chat) | accepted shapes only" (p != "" ? " · paths: " p : "") " · expires: GATE-ACCEPT · voided-by: a bot commit that changes behaviour | pre-authorization |"}' "$XL" > "$XL.t" && mv "$XL.t" "$XL"
+}
+botgit() { env GIT_AUTHOR_NAME=ci-format-bot GIT_AUTHOR_EMAIL=ci-format-bot@example.invalid GIT_COMMITTER_NAME=ci-format-bot GIT_COMMITTER_EMAIL=ci-format-bot@example.invalid git "$@" >/dev/null 2>&1; }
+preauth() {   # preauth <expires> — append the operator's ext:merge-in-order pre-authorization row
+  awk -v e="$1" '{print} /^\|---\|---\|---\|---\|---\|---\|---\|$/ {print "| 2026-11-11T10:00:00Z | * | external | ext:merge-in-order | \"merge the chain bottom-up yourself is fine, I will do it\" (chat) | operator merges chain PRs in order, then rebases or merges main into the rest · expires: " e " · voided-by: an out-of-order merge | pre-authorization |"}' "$XL" > "$XL.t" && mv "$XL.t" "$XL"
+}
+test_external_state() {
+  local ok_before=$FAIL
+  mkchain; xs 0 clean "external: clean"
+  ( cd "$OP" && echo other > other && gx add other && gx commit -m "someone else's work" && gx push origin main ); gx -C "$X" fetch -q origin
+  xs 0 default-advanced "default-advanced" "external: informational"
+  # (a) the operator merges the bottom chain PR (merge commit) — a block without the rule, expected with it
+  ( cd "$OP" && gx fetch origin && gx merge --no-ff -m "Merge PR #7" origin/demo/T1 && gx push origin main ); gx -C "$X" fetch -q origin
+  xs 3 merged-unauthorized "chain-merged(T1)" "blockedOn: external — chain-merged" "no live ext:merge-in-order pre-authorization"
+  newstub; OUT="$(PATH="$STUBPATH" bash "$SCRIPTS/digest.sh" --ledger "$XL" --worktree "$X" 2>&1)"
+  printf '%s' "$OUT" | grep -qF "chain descends from it: NO — an off-stack merge or a rebase: a blockedOn for the operator — blockedOn: external — chain-merged(T1)" \
+    || fail "external-state: the digest's default-branch line lacks the blockedOn event"
+  preauth GATE-ACCEPT; xs 0 merged-preauthorized "external: expected — chain-merged" "ext:merge-in-order, expires GATE-ACCEPT"
+  newstub; OUT="$(PATH="$STUBPATH" bash "$SCRIPTS/digest.sh" --ledger "$XL" --worktree "$X" 2>&1)"
+  printf '%s' "$OUT" | grep -qF "chain descends from it: NO — external: expected — chain-merged(T1)" \
+    || fail "external-state: the digest's default-branch line does not read expected under the rule"
+  sed -i.b 's/^mergePolicy:     OPERATOR/mergePolicy:     NONE/' "$XL"; xs 3 merged-policy-none "mergePolicy is 'NONE'"
+  sed -i.b 's/^mergePolicy:     NONE/mergePolicy:     OPERATOR/' "$XL"
+  sed -i.b 's/expires: GATE-ACCEPT/expires: T2/' "$XL"; xs 3 merged-expired "expired: T2 has landed"
+  sed -i.b 's/expires: T2/expires: 2026-11-10/' "$XL"; xs 3 merged-date-expired "expired 2026-11-10"
+  sed -i.b 's/expires: 2026-11-10/expires: GATE-ACCEPT/' "$XL"
+  # ... then rebases the rest onto main and force-pushes: patch-equivalent → expected; the build syncs → clean
+  ( cd "$OP" && gx fetch origin && git checkout -q -b demo/T2 origin/demo/T2 && gx rebase origin/main && gx push -f origin demo/T2 ); gx -C "$X" fetch -q origin
+  xs 0 rebased-preauthorized "rebased-onto-default(demo/T2)" "external: expected"
+  ( cd "$X" && git checkout -q demo/T2 && git reset -q --keep origin/demo/T2 ); xs 0 synced "external: clean"
+  # (b) a foreign commit on the remote chain branch — a block even under the rule
+  ( cd "$OP" && echo bot > bot && gx add bot && gx commit -m "style: format" && gx push origin demo/T2 ); gx -C "$X" fetch -q origin
+  xs 3 foreign "foreign-commits(demo/T2:" "operator" "blockedOn: external — foreign-commits(demo/T2: "
+  newstub; OUT="$(PATH="$STUBPATH" bash "$SCRIPTS/digest.sh" --ledger "$XL" --worktree "$X" 2>&1)"
+  printf '%s' "$OUT" | grep -qF "chain descends from it: yes — blockedOn: external — foreign-commits(demo/T2: " \
+    || fail "external-state: the digest's default-branch line does not carry the foreign-commit block"
+  # the operator merges main into the chain branch instead of rebasing: expected under the rule
+  mkchain; preauth GATE-ACCEPT
+  ( cd "$OP" && echo other > other && gx add other && gx commit -m other && gx push origin main && git checkout -q -b demo/T2 origin/demo/T2 \
+    && gx merge --no-ff -m "Merge main" origin/main && gx push origin demo/T2 ); gx -C "$X" fetch -q origin
+  xs 0 default-merged-in "default-merged-in(demo/T2)" "external: expected"
+
+  # squash merges (git only): the "(#7)" subject + patch-id, then a rebase --onto that drops T1's commits
+  mkchain
+  ( cd "$OP" && gx fetch origin && gx merge --squash origin/demo/T1 && gx commit -m "T1 work (#7)" && gx push origin main ); gx -C "$X" fetch -q origin
+  xs 3 squash-unauthorized "chain-merged(T1)" "squash" "(#7) + patch-id" "no live ext:merge-in-order"
+  preauth GATE-ACCEPT; xs 0 squash-preauthorized "external: expected — chain-merged(T1)"
+  ( cd "$OP" && git checkout -q -b demo/T2 origin/demo/T2 && gx rebase --onto origin/main origin/demo/T1 demo/T2 && gx push -f origin demo/T2 ); gx -C "$X" fetch -q origin
+  xs 0 squash-rebase-onto "rebased-onto-default(demo/T2)" "external: expected"
+  printf '%s' "$OUT" | grep -qF "foreign-rewrite" && fail "external-state squash-rebase-onto: the merged row's dropped commits read as a foreign rewrite"
+  ( cd "$X" && git checkout -q demo/T2 && git reset -q --keep origin/demo/T2 ); xs 0 squash-synced "external: clean"
+  ( cd "$OP" && git checkout -q main && echo more > more && gx add more && gx commit -m "other work (#99)" && gx push origin main ); gx -C "$X" fetch -q origin
+  xs 0 squash-integrated "default-advanced"
+  # a squash, then the operator merges main into the remaining branch instead of rebasing it
+  mkchain; preauth GATE-ACCEPT
+  ( cd "$OP" && gx fetch origin && gx merge --squash origin/demo/T1 && gx commit -m "T1 work (#7)" && gx push origin main \
+    && git checkout -q -b demo/T2 origin/demo/T2 && gx merge --no-ff -m "Merge main" origin/main && gx push origin demo/T2 ); gx -C "$X" fetch -q origin
+  xs 0 squash-main-merge "chain-merged(T1)" "default-merged-in(demo/T2)" "external: expected"
+  # a squash whose subject carries no PR number: the patch-id alone recognizes it
+  mkchain
+  ( cd "$OP" && gx fetch origin && gx merge --squash origin/demo/T1 && gx commit -m "Land the first ticket" && gx push origin main ); gx -C "$X" fetch -q origin
+  xs 3 squash-patch-id "chain-merged(T1)" "(patch-id)"
+  # a squash that is not a bottom prefix (T2's row merged, T1's not) is partial
+  mkchain
+  ( cd "$OP" && gx fetch origin && echo unrelated > u && gx add u && gx commit -m "unrelated (#8)" && gx push origin main ); gx -C "$X" fetch -q origin
+  preauth GATE-ACCEPT; xs 3 squash-out-of-order "chain-merged-partial"
+
+  # gh: PR state and retargets (stub gh answers view-<n> as tab-separated state, mergeCommit, base, head, headOid, mergedAt)
+  mkchain
+  ( cd "$OP" && gx fetch origin && gx merge --squash origin/demo/T1 && gx commit -m "Land T1" && gx push origin main ); gx -C "$X" fetch -q origin
+  printf 'MERGED\t%s\tmain\tdemo/T1\t%s\t2026-11-11T09:00:00Z\n' "$(git -C "$X" rev-parse origin/main)" "$(git -C "$X" rev-parse demo/T1)" > "$STUB_GH_DIR/view-7"
+  printf 'OPEN\t\tmain\tdemo/T2\t%s\t\n' "$(git -C "$X" rev-parse demo/T2)" > "$STUB_GH_DIR/view-8"
+  xs 3 gh-unauthorized "chain-merged(T1)" "gh: #7 merged" "retargeted(#8: demo/T1 → main)"
+  preauth GATE-ACCEPT; xs 0 gh-preauthorized "external: expected — chain-merged(T1); retargeted(#8"
+  grep -qF "pr view 7 --json state,mergedAt,mergeCommit,headRefName,headRefOid,baseRefName" "$STUB_GH_DIR/calls" || fail "external-state gh: PR state not read with the documented fields"
+  printf 'OPEN\t\trelease\tdemo/T2\t%s\t\n' "$(git -C "$X" rev-parse demo/T2)" > "$STUB_GH_DIR/view-8"
+  xs 3 gh-retarget-elsewhere "retargeted(#8: demo/T1 → release)" "blockedOn: external"
+  OUT="$(PATH="$STUBPATH" bash "$SCRIPTS/external-state.sh" --ledger "$XL" --worktree "$X" --no-gh 2>&1)"
+  printf '%s' "$OUT" | grep -qF "gh disabled (--no-gh)" || fail "external-state --no-gh: not stated"
+
+  # ext:bot-commits: a matching author's whitespace-only commit, merge of main, or allow-listed path is expected;
+  # without the row, or for a behaviour change, it is a foreign commit
+  mkchain
+  ( cd "$OP" && gx fetch origin && git checkout -q -b demo/T2 origin/demo/T2 && printf 't2\n\n' > t2 && botgit add t2 && botgit commit -m "style: format" && gx push origin demo/T2 ); gx -C "$X" fetch -q origin
+  xs 3 bot-unauthorized "foreign-commits(demo/T2:" "ci-format-bot"
+  botrow ci-format-bot; xs 0 bot-whitespace "bot-commits(demo/T2:" "(whitespace-only)" "external: expected" "ext:bot-commits ci-format-bot"
+  ( cd "$OP" && echo t3 > t2 && botgit add t2 && botgit commit -m "style: format" && gx push origin demo/T2 ); gx -C "$X" fetch -q origin
+  xs 3 bot-semantic "foreign-commits(demo/T2:"
+  mkchain; botrow 'ci-format-bot@example\.invalid'
+  ( cd "$OP" && echo other > other && gx add other && gx commit -m other && gx push origin main && git checkout -q -b demo/T2 origin/demo/T2 \
+    && botgit merge --no-ff -m "Merge main" origin/main && gx push origin demo/T2 ); gx -C "$X" fetch -q origin
+  xs 0 bot-merge-of-main "(merge-of-default)" "external: expected"
+  printf '%s' "$OUT" | grep -qF "default-merged-in" && fail "external-state bot-merge-of-main: a bot's main-merge also needed ext:merge-in-order"
+  mkchain; botrow ci-format-bot '*.md'
+  ( cd "$OP" && gx fetch origin && git checkout -q -b demo/T2 origin/demo/T2 && echo "# notes" > NOTES.md && botgit add NOTES.md && botgit commit -m "docs: regenerate" && gx push origin demo/T2 ); gx -C "$X" fetch -q origin
+  xs 0 bot-paths "(paths-allowlisted)" "external: expected"
+  [ "$FAIL" -eq "$ok_before" ] && say "PASS external-state"
+}
+
 say "orchestrate-build self-test"
 test_ci_boundary
 test_drive_build
 test_digest
+test_monorepo
+test_external_state
 
 if [ "$FAIL" -eq 0 ]; then
   say "ALL PASS"

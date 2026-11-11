@@ -31,8 +31,9 @@ that SKILL past the line ceiling and mix sequencing with content; this skill is 
 > `BACKLOG.*` / `*_PLAN.md` / `OPERATIONAL_READINESS.md` outputs under `docs/build/`.
 
 ## Orient
-Resolve the memory root (`build-memory` `memory-root.sh`); confirm `docs/build/` exists and the validator is
-green (`check-build-memory.sh .`) before reconciling — reconciliation over an inconsistent layout is noise. Then
+Resolve the memory root (`build-memory` `memory-root.sh`); confirm `docs/build/` exists (in a monorepo subproject, the
+`BUILD_MEMORY_ROOT` dir, with every `docs/…` path below under its parent — BM-ROOT-03; `check-backlog.sh` then
+defaults to it) and the validator is green (`check-build-memory.sh .`) before reconciling — reconciliation over an inconsistent layout is noise. Then
 follow the mode.
 
 ## The modes

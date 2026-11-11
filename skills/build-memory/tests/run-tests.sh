@@ -14,6 +14,8 @@ set -o pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS="$(cd "$HERE/../scripts" && pwd)"
 FAIL=0
+# Hermetic: an operator's exported memory-root settings (e.g. a monorepo's BUILD_MEMORY_ROOT) must not leak in.
+unset BUILD_MEMORY_ROOT BUILD_MEMORY_TICKETS BUILD_MEMORY_ADR AGENT_SCRATCH_DIR
 say()  { printf '%s\n' "$*"; }
 fail() { printf '  ✗ %s\n' "$*"; FAIL=1; }
 
@@ -68,7 +70,7 @@ test_legacy() {
   cp -R "$HERE/legacy-scratch" "$W"; cp -R "$HERE/legacy-scratch" "$R"; gitify "$W"
   local ok=1 out rc mode
   # memory-root: scratch before migrate (no marker)
-  mode="$(bash "$SCRIPTS/memory-root.sh" "$W" | sed -n 's/^mode=//p')"
+  mode="$(bash "$SCRIPTS/memory-root.sh" "$W" 2>/dev/null | sed -n 's/^mode=//p')"
   [ "$mode" = "scratch" ] || { fail "legacy: pre-migrate memory-root mode=$mode (want scratch)"; ok=0; }
   # validator: not a build-memory repo -> exit 2
   bash "$SCRIPTS/check-build-memory.sh" "$W" >/dev/null 2>&1; rc=$?
@@ -89,7 +91,7 @@ test_legacy() {
   cmp -s "$W/docs/build/runs/P20.3.md" "$R/.agents/scratch/implement-spec_p20-3_20260909.md" || { fail "legacy: P20.3 not byte-identical"; ok=0; }
   cmp -s "$W/docs/build/tools/gen.sh" "$R/.agents/scratch/tools/gen.sh" || { fail "legacy: gen.sh not byte-identical"; ok=0; }
   # memory-root now committed (migrate wrote the marker)
-  mode="$(bash "$SCRIPTS/memory-root.sh" "$W" | sed -n 's/^mode=//p')"
+  mode="$(bash "$SCRIPTS/memory-root.sh" "$W" 2>/dev/null | sed -n 's/^mode=//p')"
   [ "$mode" = "committed" ] || { fail "legacy: post-migrate memory-root mode=$mode (want committed)"; ok=0; }
   [ "$ok" = 1 ] && say "PASS legacy-scratch"
 }
@@ -98,10 +100,20 @@ test_legacy() {
 test_memory_root() {
   local W; W="$(tmp)/repo"; mkdir -p "$W"; gitify "$W"
   local ok=1 mode root
-  mode="$(bash "$SCRIPTS/memory-root.sh" "$W" | sed -n 's/^mode=//p')"
+  local out rc
+  out="$(bash "$SCRIPTS/memory-root.sh" "$W" 2>&1 >/dev/null)"
+  mode="$(bash "$SCRIPTS/memory-root.sh" "$W" 2>/dev/null | sed -n 's/^mode=//p')"
   [ "$mode" = "scratch" ] || { fail "memory-root: bare repo mode=$mode (want scratch)"; ok=0; }
-  root="$(BUILD_MEMORY_ROOT=/opt/mem bash "$SCRIPTS/memory-root.sh" "$W" | sed -n 's/^root=//p')"
-  [ "$root" = "/opt/mem" ] || { fail "memory-root: BUILD_MEMORY_ROOT override root=$root (want /opt/mem)"; ok=0; }
+  printf '%s' "$out" | grep -qF "mode=scratch (BUILD_MEMORY_ROOT unset" || { fail "memory-root: scratch mode is not stated on stderr"; ok=0; }
+  # 0.5.4 (BM-ROOT-03): a BUILD_MEMORY_ROOT naming a missing dir is an error, never a silent root
+  out="$(BUILD_MEMORY_ROOT=/opt/mem-missing-$$ bash "$SCRIPTS/memory-root.sh" "$W" 2>&1)"; rc=$?
+  { [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF "which does not exist" && ! printf '%s' "$out" | grep -q '^root='; } \
+    || { fail "memory-root: BUILD_MEMORY_ROOT on a missing dir exit=$rc (want 2, no root= line)"; ok=0; }
+  root="$(BUILD_MEMORY_ROOT=/opt/mem-missing-$$ bash "$SCRIPTS/memory-root.sh" --allow-missing "$W" 2>/dev/null | sed -n 's/^root=//p')"
+  [ "$root" = "/opt/mem-missing-$$" ] || { fail "memory-root: --allow-missing root=$root (want /opt/mem-missing-$$)"; ok=0; }
+  mkdir -p "$W/mem"
+  root="$(BUILD_MEMORY_ROOT="$W/mem" bash "$SCRIPTS/memory-root.sh" "$W" | sed -n 's/^root=//p')"
+  [ "$root" = "$W/mem" ] || { fail "memory-root: BUILD_MEMORY_ROOT override root=$root (want $W/mem)"; ok=0; }
   [ "$ok" = 1 ] && say "PASS memory-root"
 }
 
@@ -639,6 +651,92 @@ test_passed_gate_deferrals() {
   [ "$ok" = 1 ] && say "PASS passed-gate-deferrals"
 }
 
+# ── monorepo layout (0.5.4, BM-ROOT-03): build memory in a subproject, selected by BUILD_MEMORY_ROOT ──
+# tests/v2-monorepo = a monorepo root (its own docs/, no build memory) + sub/proj/docs/{build,tickets,adr}
+# (v2-clean with toplevel-relative manifest/memoryRoot values). Every assertion here failed against 0.5.3.
+mono_diags() { printf '%s\n' "$1" | grep -E '^    [-~] |^  [✓✗]'; }   # the diagnostics, minus repo path + JSON lines
+test_monorepo() {
+  local W P ok=1 out rc root R F MR="sub/proj/docs/build"
+  W="$(tmp)/repo"; cp -R "$HERE/v2-monorepo" "$W"; gitify "$W"; P="$(cd "$W" && pwd -P)"
+  # memory-root: unset → loud error naming the subproject root (0.5.3 silently fell back to scratch)
+  out="$(cd "$W" && bash "$SCRIPTS/memory-root.sh" 2>&1)"; rc=$?
+  { [ "$rc" -eq 3 ] && printf '%s' "$out" | grep -qF "    $MR" && ! printf '%s' "$out" | grep -q '^mode='; } \
+    || { fail "monorepo: memory-root without BUILD_MEMORY_ROOT exit=$rc (want 3 naming $MR)"; ok=0; }
+  root="$(cd "$W" && AGENT_SCRATCH_DIR="$W/.scratch" bash "$SCRIPTS/memory-root.sh" 2>/dev/null | sed -n 's/^mode=//p')"
+  [ "$root" = "scratch" ] || { fail "monorepo: an explicit AGENT_SCRATCH_DIR did not choose scratch ($root)"; ok=0; }
+  # relative BUILD_MEMORY_ROOT resolves against the toplevel, from any cwd; --paths derives tickets/adr from it
+  out="$(cd "$W/sub" && BUILD_MEMORY_ROOT="$MR" bash "$SCRIPTS/memory-root.sh" --paths)"; rc=$?
+  for kw in "mode=committed" "root=$P/$MR" "project=$P/sub/proj" "docs=$P/sub/proj/docs" "tickets=$P/sub/proj/docs/tickets" "adr=$P/sub/proj/docs/adr"; do
+    printf '%s\n' "$out" | grep -qxF "$kw" || { fail "monorepo: memory-root --paths lacks '$kw' (exit=$rc)"; ok=0; }
+  done
+  out="$(cd "$W" && BUILD_MEMORY_ROOT="$MR" BUILD_MEMORY_TICKETS=sub/proj/contracts bash "$SCRIPTS/memory-root.sh" --paths)"
+  printf '%s\n' "$out" | grep -qxF "tickets=$P/sub/proj/contracts" || { fail "monorepo: BUILD_MEMORY_TICKETS override not honoured"; ok=0; }
+  (cd "$W" && BUILD_MEMORY_ROOT="$MR" BUILD_MEMORY_TICKETS=other/tickets bash "$SCRIPTS/memory-root.sh" --paths >/dev/null 2>&1); rc=$?
+  [ "$rc" -eq 2 ] || { fail "monorepo: a tickets override outside the project dir exit=$rc (want 2)"; ok=0; }
+  (cd "$W" && BUILD_MEMORY_ROOT=sub/nope/docs/build bash "$SCRIPTS/memory-root.sh" >/dev/null 2>&1); rc=$?
+  [ "$rc" -eq 2 ] || { fail "monorepo: memory-root on a missing BUILD_MEMORY_ROOT exit=$rc (want 2)"; ok=0; }
+
+  # validator, tree mode: from the toplevel ('.') it needs the root; with it, every spelling validates the subproject
+  out="$(cd "$W" && bash "$SCRIPTS/check-build-memory.sh" . 2>&1)"; rc=$?
+  { [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -qF "hint: committed build memory lives in a subdir" && printf '%s' "$out" | grep -qF "    $MR"; } \
+    || { fail "monorepo: check '.' without the root exit=$rc (want 2 + a hint naming $MR)"; ok=0; }
+  out="$(cd "$W" && BUILD_MEMORY_ROOT="$MR" bash "$SCRIPTS/check-build-memory.sh" . 2>&1)"; rc=$?
+  { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qF "check-build-memory: $P/sub/proj"; } || { fail "monorepo: check '.' with BUILD_MEMORY_ROOT exit=$rc (want 0)"; printf '%s\n' "$out" | sed 's/^/      /' | head -12; ok=0; }
+  printf '%s' "$out" | grep -qF "sub/proj/docs/tickets/00_MANIFEST.md" && { fail "monorepo: a toplevel-relative manifest path was reported stale"; ok=0; }
+  (cd "$W/sub" && BUILD_MEMORY_ROOT="$MR" bash "$SCRIPTS/check-build-memory.sh" >/dev/null 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || { fail "monorepo: check from a subdir cwd with BUILD_MEMORY_ROOT exit=$rc (want 0)"; ok=0; }
+  bash "$SCRIPTS/check-build-memory.sh" "$W/sub/proj" >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 0 ] || { fail "monorepo: check <project dir> exit=$rc (want 0)"; ok=0; }
+  (cd "$W" && bash "$SCRIPTS/check-build-memory.sh" --memory-root "$MR" >/dev/null 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || { fail "monorepo: check --memory-root exit=$rc (want 0)"; ok=0; }
+  BUILD_MEMORY_ROOT="$MR" bash "$SCRIPTS/check-build-memory.sh" "$HERE/v2-clean" >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 0 ] || { fail "monorepo: an exported BUILD_MEMORY_ROOT hijacked an explicit repo_root (exit=$rc)"; ok=0; }
+  (cd "$W" && BUILD_MEMORY_ROOT=sub/nope/docs/build bash "$SCRIPTS/check-build-memory.sh" . >/dev/null 2>&1); rc=$?
+  [ "$rc" -eq 2 ] || { fail "monorepo: check on a missing BUILD_MEMORY_ROOT exit=$rc (want 2)"; ok=0; }
+
+  # the same fixture under sub/proj reports exactly the flat repo's diagnostics (labels relative to the project)
+  for F in v2-violations v2-guards-violations; do
+    R="$(tmp)/flat"; cp -R "$HERE/$F" "$R"; gitify "$R"
+    M="$(tmp)/mono"; mkdir -p "$M/sub/proj"; cp -R "$HERE/$F/docs" "$M/sub/proj/docs"; printf 'root\n' > "$M/README.md"; gitify "$M"
+    a="$(mono_diags "$(bash "$SCRIPTS/check-build-memory.sh" "$R" 2>&1)")"
+    b="$(mono_diags "$(cd "$M" && BUILD_MEMORY_ROOT="$MR" bash "$SCRIPTS/check-build-memory.sh" . 2>&1)")"
+    [ -n "$a" ] && [ "$a" = "$b" ] || { fail "monorepo: $F under sub/proj reports differently from the flat repo"; diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") | sed 's/^/      /' | head -10; ok=0; }
+  done
+
+  # history mode: --staged and --range judge the subproject's records, with project-relative labels
+  F="$W/$MR/../tickets/DEFERRALS.md"
+  printf '| D-T2-9 | monorepo append | n/a | T2 | n/a | none | OPEN |\n' >> "$F"
+  printf 'more root docs\n' >> "$W/docs/README.md"
+  ( cd "$W" && git add -A ) >/dev/null 2>&1
+  (cd "$W" && BUILD_MEMORY_ROOT="$MR" bash "$SCRIPTS/check-build-memory.sh" . --staged >/dev/null 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || { fail "monorepo: --staged clean append exit=$rc (want 0)"; ok=0; }
+  ( cd "$W" && git -c user.email=t@t -c user.name=t commit -qm append ) >/dev/null 2>&1
+  grep -v 'D-T2-9' "$F" > "$F.t" && mv "$F.t" "$F"; ( cd "$W" && git add -A ) >/dev/null 2>&1
+  out="$(cd "$W" && BUILD_MEMORY_ROOT="$MR" bash "$SCRIPTS/check-build-memory.sh" . --staged 2>&1)"; rc=$?
+  { [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -qF "row-annotate [removed] docs/tickets/DEFERRALS.md:" && printf '%s' "$out" | grep -qF "in $P/sub/proj"; } \
+    || { fail "monorepo: --staged row removal exit=$rc (want 1, labelled docs/tickets/DEFERRALS.md)"; printf '%s\n' "$out" | sed 's/^/      /' | head -8; ok=0; }
+  ( cd "$W" && git -c user.email=t@t -c user.name=t commit -qm remove ) >/dev/null 2>&1
+  (cd "$W" && BUILD_MEMORY_ROOT="$MR" bash "$SCRIPTS/check-build-memory.sh" . --range HEAD~2..HEAD~1 >/dev/null 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || { fail "monorepo: --range over the append exit=$rc (want 0)"; ok=0; }
+  (cd "$W" && BUILD_MEMORY_ROOT="$MR" bash "$SCRIPTS/check-build-memory.sh" . --range HEAD~1..HEAD >/dev/null 2>&1); rc=$?
+  [ "$rc" -eq 1 ] || { fail "monorepo: --range over the removal exit=$rc (want 1)"; ok=0; }
+
+  # guards marker: "created after the marker" reads git history from the subproject (git log --relative)
+  printf '<!-- build-memory-guards: 1 -->\n' >> "$W/$MR/README.md"
+  ( cd "$W" && git add -A && git -c user.email=t@t -c user.name=t commit -qm guards ) >/dev/null 2>&1
+  printf '# T2 run\n' > "$W/$MR/runs/T2.md"
+  out="$(cd "$W" && BUILD_MEMORY_ROOT="$MR" bash "$SCRIPTS/check-build-memory.sh" . 2>&1)"; rc=$?
+  { [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -qF -- "- harness: runs/T2.md has no 'Harness:" && ! printf '%s' "$out" | grep -qF -- "- harness: runs/T1.md"; } \
+    || { fail "monorepo: guards — only the run ledger created after the marker should fail (exit=$rc)"; printf '%s\n' "$out" | sed 's/^/      /' | head -8; ok=0; }
+
+  # planning mode: docs/… paths resolve under the memory root's docs dir, even before the root exists
+  mkdir -p "$W/sub/plan/docs"
+  printf '# plan\n\n## CURRENT STATE\n\n```\nnextUnit:        A2\nlastCompleted:   A1\nupdatedAt:       2026-09-30T18:00:00Z\n```\n\n| id | status |\n|---|---|\n| A1 | done |\n| A2 | open |\n\n## Change log\n- 2026-09-30T18:00:00Z — A1 done.\n' > "$W/sub/plan/docs/research-ledger.md"
+  out="$(cd "$W" && BUILD_MEMORY_ROOT=sub/plan/docs/build bash "$SCRIPTS/check-build-memory.sh" . --planning docs/research-ledger.md 2>&1)"; rc=$?
+  { [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qF "sub/plan/docs/research-ledger.md"; } || { fail "monorepo: --planning docs/research-ledger.md under a not-yet-created root exit=$rc (want 0)"; printf '%s\n' "$out" | sed 's/^/      /' | head -6; ok=0; }
+  [ "$ok" = 1 ] && say "PASS monorepo"
+}
+
 test_clean
 test_violations
 test_legacy
@@ -658,6 +756,7 @@ test_history
 test_reqcov
 test_passed_gate_deferrals
 test_positional_status
+test_monorepo
 
 if [ "$FAIL" -eq 0 ]; then
   say "ALL PASS"

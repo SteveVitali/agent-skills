@@ -12,6 +12,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS="$(cd "$HERE/../scripts" && pwd)"
 STUB_GH="$(cd "$HERE/../../orchestrate-build/tests" && pwd)/stub-gh.sh"
 FAIL=0
+# Hermetic: an operator's exported memory-root settings (e.g. a monorepo's BUILD_MEMORY_ROOT) must not leak in.
+unset BUILD_MEMORY_ROOT BUILD_MEMORY_TICKETS BUILD_MEMORY_ADR AGENT_SCRATCH_DIR
 say()  { printf '%s\n' "$*"; }
 fail() { printf '  ✗ %s\n' "$*"; FAIL=1; }
 
@@ -90,6 +92,11 @@ test_check_backlog() {
   cb "$D"
   printf '%s' "$OUT" | grep -qF "missing: D-T1-4 is owed but appears in no backlog sources cell" || fail "check-backlog: dropped source not reported"
   printf '%s' "$OUT" | grep -qF "duplicate: R-4 appears in 2 backlog rows" || fail "check-backlog: double-tracked source not reported"
+  # 0.5.4 (BM-ROOT-03): with no arguments, a monorepo subproject's root comes from BUILD_MEMORY_ROOT
+  local M; M="$(mktemp -d)/mono"; mkbuild "$M/sub/proj"; ( cd "$M" && git init -q )
+  OUT="$(cd "$M" && BUILD_MEMORY_ROOT=sub/proj/docs/build bash "$SCRIPTS/check-backlog.sh" --json "$M/r.json" 2>&1)"; RC=$?
+  { [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -qF "engineering closed 4 / 8 · requirement satisfied 2 / 8"; } \
+    || { fail "check-backlog monorepo: BUILD_MEMORY_ROOT defaults exit=$RC (want 0 with the same sums)"; printf '%s\n' "$OUT" | sed 's/^/      /' | head -5; }
   [ "$FAIL" -eq "$ok_before" ] && say "PASS check-backlog"
 }
 

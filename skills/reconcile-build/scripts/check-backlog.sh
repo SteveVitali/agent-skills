@@ -10,7 +10,7 @@
 # Usage:
 #   check-backlog.sh [backlog_csv] [build_dir] [tickets_dir] [--json PATH]
 #
-# Arguments (all optional; sensible defaults relative to cwd):
+# Arguments (all optional; defaults relative to cwd, or under $BUILD_MEMORY_ROOT when it is set):
 #   backlog_csv  — the backlog (default: docs/build/BACKLOG.csv)
 #   build_dir    — docs/build (default: docs/build)
 #   tickets_dir  — docs/tickets (default: docs/tickets)
@@ -51,10 +51,20 @@ while [ $# -gt 0 ]; do
     *) POS+=("$1"); shift ;;
   esac
 done
-CSV="${POS[0]:-docs/build/BACKLOG.csv}"
-BUILD="${POS[1]:-docs/build}"
-TICKETS="${POS[2]:-docs/tickets}"
+# Defaults: docs/build and docs/tickets relative to cwd — or, with $BUILD_MEMORY_ROOT set (a monorepo subproject,
+# BM-ROOT-03), that root and its sibling tickets dir (BUILD_MEMORY_TICKETS overrides), as build-memory resolves them.
+D_BUILD="docs/build" ; D_TICKETS="docs/tickets"
+if [ -n "${BUILD_MEMORY_ROOT:-}" ]; then
+  # shellcheck source=../../build-memory/scripts/bm-paths.sh
+  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../build-memory/scripts/bm-paths.sh"
+  bm_set_paths "$(bm_resolve_against "$BUILD_MEMORY_ROOT" .)" . || { echo "check-backlog: $BM_ERR" >&2; exit 2; }
+  D_BUILD="$BM_BUILD" ; D_TICKETS="$BM_TICKETS"
+fi
+CSV="${POS[0]:-$D_BUILD/BACKLOG.csv}"
+BUILD="${POS[1]:-$D_BUILD}"
+TICKETS="${POS[2]:-$D_TICKETS}"
 ADR_DIR="$(dirname "$BUILD")/adr"
+[ -n "${BM_ADR:-}" ] && [ -z "${POS[1]:-}" ] && ADR_DIR="$BM_ADR"
 [ -n "$JSON" ] || JSON="$(mktemp "${TMPDIR:-/tmp}/backlog-check.XXXXXXXX")" || exit 2
 
 [ -f "$CSV" ] || { echo "check-backlog: no backlog at $CSV"; printf '{"schema":"backlog-check/2","backlog":"%s","present":false}\n' "$CSV" > "$JSON"; echo "  JSON: $JSON"; exit 2; }

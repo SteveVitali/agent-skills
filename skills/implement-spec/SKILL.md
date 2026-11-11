@@ -98,7 +98,12 @@ bash skills/build-memory/scripts/memory-root.sh "$TASK_ROOT"   # prints: mode=<c
 ```
 
 In **committed** mode the run ledger (0.4), ADRs, `DEFERRALS.md` rows and the `BUILD_INDEX.md`/`LEDGER.md` close
-(6.5) live under that root and are committed with the change. In **scratch** mode — any repo without a
+(6.5) live under that root and are committed with the change. **`<memoryRoot>`** below is that `root=`; in a
+monorepo subproject (`BUILD_MEMORY_ROOT=<sub>/docs/build`, build-memory BM-ROOT-03) every `docs/build/…`,
+`docs/tickets/…` and `docs/adr/…` path in this skill means `<memoryRoot>/…`, `<memoryRoot>/../tickets/…` and
+`<memoryRoot>/../adr/…` (`memory-root.sh --paths` prints them) — with the variable unset they are the literal
+`docs/…` paths. Keep `BUILD_MEMORY_ROOT` set for every build-memory script call (it is not inherited by a fresh
+shell unless the harness exports it); `memory-root.sh` exits non-zero rather than guess. In **scratch** mode — any repo without a
 `docs/build/README.md` marker — everything below is byte-for-byte the 0.1.x behaviour, so a repo that never opted
 in sees no change. (Resolve the script by its installed skill name, or by an absolute skills root when running in
 another repo's worktree, exactly as Phase 3 resolves `self-review`.)
@@ -480,12 +485,12 @@ the evidence report is **also** the `## Evidence report` section of `runs/<ID>.m
 
 ### 6.5 — Close the ticket *(committed mode, when the spec is a chain ticket)*
 When this run implemented a **chain ticket** — detected by a `Sequence:` header on the ticket plus a
-`docs/build/LEDGER.md` in the resolved root — the worker closes its own ticket (BM-INDEX-01, and D4 of the
+`LEDGER.md` in the resolved root (`<memoryRoot>/LEDGER.md`; `docs/build/LEDGER.md` by default) — the worker closes its own ticket (BM-INDEX-01, and D4 of the
 build-memory design: on the manual floor there is no orchestrator to advance the ledger). After the PR exists,
 in **one** closeout commit:
 
 0. **Read CI on the pushed code head (BM-CI-01).** `bash <skills>/orchestrate-build/scripts/ci-boundary.sh --pr
-   <n> --json <memoryRoot>/logs/ci-<ID>.json` (bounded wait; a repo hook `docs/build/tools/ci_boundary.*` runs
+   <n> --json <memoryRoot>/logs/ci-<ID>.json` (bounded wait; a repo hook `<memoryRoot>/tools/ci_boundary.*` — found via `BUILD_MEMORY_ROOT` in a subproject — runs
    instead when present; without the script, `gh pr checks <n>` until no check is pending). Record its last line
    as the run ledger's `ci:` field — `ci: <pass|pending|unknown|none-declared> #<n>@<sha7> (<check> <run-id>; …)`.
    - Red, cancelled or a missing required check **this ticket caused** → fix it here, re-push, re-read.
@@ -514,12 +519,14 @@ in **one** closeout commit:
    and `*.jsonl`; a correction is a new dated entry naming the sha and line it corrects.
 3. **Validate** — set the run ledger's `Closed:` from `date -u`, stage the closeout (step 4's `git add`), then
    `bash skills/build-memory/scripts/check-build-memory.sh .` and `check-build-memory.sh . --staged` (history mode,
-   BM-HIST-01: the staged lines only append, at the regions' ends, with dates from the clock) must both exit 0 —
+   BM-HIST-01: the staged lines only append, at the regions' ends, with dates from the clock; in a monorepo
+   subproject both run with `BUILD_MEMORY_ROOT` set, from the worktree toplevel) must both exit 0 —
    any non-zero exit is a real block, not something to commit past — plus the repo's own docs/memory check if its
    AGENTS.md names one.
 4. **Commit + push** the closeout as a **second, separate** commit:
    ```bash
-   git add docs/build/LEDGER.md docs/build/BUILD_INDEX.md docs/build/runs/<ID>.md
+   M="$(bash skills/build-memory/scripts/memory-root.sh | sed -n 's/^root=//p')"   # <memoryRoot>; docs/build by default
+   git add "$M/LEDGER.md" "$M/BUILD_INDEX.md" "$M/runs/<ID>.md"   # = docs/build/… in a single-repo layout
    git commit -m "docs(build): close <ID>"
    git push
    ```
