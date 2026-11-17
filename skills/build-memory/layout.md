@@ -40,7 +40,7 @@ text in this file (0.5.0 applied the last of the SK-01…SK-25 proposals); the h
 │       ├── pr/<ID>.md                # PR bodies as submitted
 │       ├── readouts/                 # GATE-G<k>.md · GATE-ACCEPT.md · HUMAN-H<k>.md (append-only; templates/READOUT.md)
 │       ├── planning/                 # re-planning rounds: <date -u +%F>_planning-ledger.md, <date -u +%F>_decision-memo.md
-│       ├── reports/                  # project reports; ledger-archive/ (BM-LEDGER-08); digests/ (BM-DIGEST-01)
+│       ├── reports/                  # project reports; ledger-archive/ (BM-LEDGER-08); digests/ (BM-DIGEST-01); audits/ (audit-build)
 │       ├── tools/                    # validators + generators; repo hooks ci_boundary.*, memory_guard.*; record_policy/
 │       ├── fixtures/                 # small scratch fixtures (size-capped)
 │       ├── logs/                     # gitignored: `*` + `!.gitignore`; drive-build/ under it
@@ -219,7 +219,8 @@ updatedAt        # date -u +%FT%TZ at writing (BM-CLOCK-01)
   heading). Fixed shape, no markup before the kind, each entry ≤ 2 KiB (BM-LEDGER-06):
   `- <date -u +%F> — <ID> <kind> — branch · PR · base · one-line summary · **Verify:** … · **Deferrals:** opened/closed ids · **Deviations:** … · chainTip → … · next → …`
   plus optional `· ci: … · layer: … · harness: …` fields; `kind` ∈ done | blocked | inserted
-  | split | gate | pause | round | correction | restored | repair | harness-switch | retroactive.
+  | split | gate | pause | round | correction | restored | repair | harness-switch | retroactive
+  | audit.
   A `repair` names its gap after the kind: `repair — close: <what was missing> (<worker harness>,
   why)` for an orchestrator repair of a worker close, `repair — ci: #<n> read pass` for a CI block
   cleared. A second `repair — close:` in one round sets `blockedOn: worker close protocol broken
@@ -227,6 +228,9 @@ updatedAt        # date -u +%FT%TZ at writing (BM-CLOCK-01)
   `harness-switch` entry reads `<old> → <new> · reason · operator: "<words>" (<date -u>, <channel>)`
   (BM-HARNESS-01); a `retroactive` entry records work that landed outside the loop (an interactive
   session, an off-stack PR) with its chain row and run ledger, before anything else proceeds.
+  An `audit` entry records an `audit-build` run: `- <date -u +%F> — <audited-through> audit — scope ·
+  tickets n · findings b/M/m/n (confirmed) · routes · report <path> · harness: <auditor>`; its report and
+  datasets live under `docs/build/reports/audits/` (append-only).
 - `drive-build.sh` parses `projectStatus`, `nextTicket`, `pauseRequested`, `blockedOn`,
   `buildWorktree`, `returnPass`, `manifest` with the never-fail reader; unknown keys are
   ignored; a legacy ledger without the new keys still drives (BM-LEDGER-07).

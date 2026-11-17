@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-skills:audit-build:finding:1",
+  "title": "audit-build finding record (one JSON object per line in <audit-id>.findings.jsonl). Per-ticket rows (the denominator) go in <audit-id>.tickets.tsv; mutation probes go in <audit-id>.mutations.tsv.",
+  "type": "object",
+  "required": [
+    "id",
+    "audit_id",
+    "ticket",
+    "severity",
+    "category",
+    "claim",
+    "evidence",
+    "verdict"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique within the audit, e.g. A20261117-ab12cd3-007."
+    },
+    "audit_id": {
+      "type": "string"
+    },
+    "audit_round": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "1 normally; 2 for the independent duplicate audit in evaluate mode."
+    },
+    "ticket": {
+      "type": "string"
+    },
+    "implementer": {
+      "type": "string",
+      "description": "<harness>/<model-id> from BUILD_INDEX; filled in after the claims pass when blind."
+    },
+    "stratum": {
+      "type": "string",
+      "enum": [
+        "primitive",
+        "consumer",
+        "fixture-oracle",
+        "integration",
+        "ui",
+        "other"
+      ]
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "blocker",
+        "major",
+        "minor",
+        "nit"
+      ]
+    },
+    "severity_adjusted": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "blocker",
+        "major",
+        "minor",
+        "nit",
+        null
+      ]
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "correctness",
+        "boundary",
+        "security",
+        "contract",
+        "claims",
+        "test-adequacy",
+        "evidence-integrity",
+        "ownership",
+        "interface",
+        "records",
+        "process",
+        "spec"
+      ]
+    },
+    "origin": {
+      "type": "string",
+      "enum": [
+        "implementer",
+        "in-ticket-review",
+        "contract",
+        "spec",
+        "cross-ticket",
+        "unknown"
+      ]
+    },
+    "claim": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "object",
+      "required": [
+        "location",
+        "reproduction"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "location": {
+          "type": "string",
+          "description": "file:line, or a record path and anchor"
+        },
+        "reproduction": {
+          "type": "string",
+          "description": "Exact command(s)"
+        },
+        "observed": {
+          "type": "string"
+        },
+        "failure_scenario": {
+          "type": "string"
+        }
+      }
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "confirmed",
+        "plausible",
+        "refuted",
+        ""
+      ],
+      "description": "Empty until verification."
+    },
+    "verifier_evidence": {
+      "type": "string"
+    },
+    "route": {
+      "type": "string",
+      "enum": [
+        "repair-open-pr",
+        "return-pass",
+        "insert",
+        "operator-spec",
+        "none",
+        ""
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "fixed",
+        "still-open",
+        "regressed",
+        "wontfix"
+      ],
+      "description": "Set by re-audits."
+    },
+    "detected_in_ticket_review": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "notes": {
+      "type": "string"
+    },
+    "duplicate_of": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Evaluate mode, duplicate subset: the id of the same defect as found in the other audit round (set by the verifier or coordinator when matching). Used for overlap and Lincoln-Petersen estimates."
+    }
+  }
+}

@@ -48,7 +48,7 @@ The full design rationale, with the literature behind each phase, is in
 
 ## The skills around it
 
-Ten more skills stand alongside it — five cover the multi-session build lifecycle, three review
+Eleven more skills stand alongside it — six cover the multi-session build lifecycle, three review
 and answer, two document:
 
 | Skill | Purpose |
@@ -58,6 +58,7 @@ and answer, two document:
 | [`orchestrate-build`](skills/orchestrate-build/SKILL.md) | Drive that chain to completion: run each ticket through `implement-spec` in a fresh context, report progress, pause for intervention, finish with the standard tail — the execution half |
 | [`build-memory`](skills/build-memory/SKILL.md) | Owns the committed build-memory layout (`docs/build/`, `docs/tickets/`, `docs/adr/`), templates, validator, and legacy-scratch migration — the shared layer the build skills cite |
 | [`reconcile-build`](skills/reconcile-build/SKILL.md) | The closeout the tail tickets invoke: one complete backlog + operational readiness, spec reconciliation, and a read-only integration plan |
+| [`audit-build`](skills/audit-build/SKILL.md) | Independent fresh-context re-review of landed tickets (last N, since the last audit, or a range), with verified findings routed to the build's repair paths; plus a pre-registered, blinded evaluation mode that measures how much auditing an implementer actually needs |
 | [`self-review`](skills/self-review/SKILL.md) | Two-pass review of your own branch, pre-PR: mechanical verification, then independence-preserving design critique |
 | [`review-pr`](skills/review-pr/SKILL.md) | Review someone else's PR: CI/verification grounding, focused design + security passes, calibrated severities, high-precision inline comments |
 | [`address-pr-comments`](skills/address-pr-comments/SKILL.md) | Work through review feedback on your PR: triage every thread, fix or push back with evidence, reply with commit links |
@@ -74,7 +75,7 @@ the next stage reads:
 | S0 Brief | the founding prompt is captured (`docs/brief.md`) | operator / `synthesize-spec` |
 | S1–S3 Research → spec | research ledger rows executed in fresh contexts; the spec synthesized, reviewed, and **ratified** | [`synthesize-spec`](skills/synthesize-spec/SKILL.md) |
 | S4 Decomposition | the ratified spec split into a dependency-ordered ticket chain; build memory seeded | [`decompose-spec`](skills/decompose-spec/SKILL.md) + [`build-memory`](skills/build-memory/SKILL.md) |
-| S5 Build | each ticket run end-to-end in a fresh context; the worker closes its own ledger | [`orchestrate-build`](skills/orchestrate-build/SKILL.md) → [`implement-spec`](skills/implement-spec/SKILL.md) |
+| S5 Build | each ticket run end-to-end in a fresh context; the worker closes its own ledger; landed work audited independently when the operator chooses | [`orchestrate-build`](skills/orchestrate-build/SKILL.md) → [`implement-spec`](skills/implement-spec/SKILL.md); [`audit-build`](skills/audit-build/SKILL.md) |
 | S6 Capstone | whole-build gap analysis → composed verification → closure → operator sign-off, as tail tickets | `CAP.*` / `GATE-ACCEPT` tickets |
 | S7 Reconciliation | one backlog + readiness, spec reconciliation, integration plan | [`reconcile-build`](skills/reconcile-build/SKILL.md) (via `REC.*`) |
 | S8 Docs | human-facing and agent-facing docs converged with the code | [`refresh-repo-docs`](skills/refresh-repo-docs/SKILL.md) + [`agent-docs`](skills/agent-docs/SKILL.md) (via `DOC.*`) |
