@@ -71,7 +71,7 @@ updatedAt:       <date -u +%FT%TZ, at writing>
      `## PHASE LOG — Round <n>`. One entry per event, <= 2 KiB, no markup before the kind:
      `<date -u +%F> — <ID> <kind> — branch · PR · base · summary · **Verify:** … · **Deferrals:** … · **Deviations:** … · chainTip → … · next → …`
      with optional `· ci: … · layer: … · harness: …`. kind ∈ done | blocked | inserted | split | gate |
-     pause | round | correction | restored | repair | harness-switch | retroactive. A repair names its gap:
+     pause | round | correction | restored | repair | harness-switch | retroactive | audit. A repair names its gap:
      `repair — close: <what> (<worker>, why)` / `repair — ci: #<n> read pass`; a second close repair in a
      round sets blockedOn. -->
 

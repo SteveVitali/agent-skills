@@ -36,6 +36,12 @@ retired '\(forward: SK-|forward: SK-[0-9]' 'a forward reference to an applied pr
 present() {   # present <fixed string> <label> <file> — matched across line wraps
   tr '\n' ' ' < "$3" | sed -E 's/[[:space:]]+/ /g' | grep -qF -- "$1" || fail "$(basename "$(dirname "$3")")/$(basename "$3") lacks $2 ('$1')"
 }
+AB="$S/audit-build/SKILL.md"
+present '**Read-only on the build.**' 'audit-build read-only rule' "$AB"
+present '**Verify every finding.**' 'audit-build verification rule' "$AB"
+present '**No silent fixes.**' 'audit-build no-silent-fix rule' "$AB"
+present '**No cadence of its own.**' 'audit-build has no default cadence' "$AB"
+present 'Pre-register (before any audit runs)' 'evaluate mode pre-registration' "$S/audit-build/modes/evaluate.md"
 present '**CI truth (BM-CI-01).**' 'the boundary CI read (SK-01)' "$OB"
 present 'scripts/ci-boundary.sh' 'the ci-boundary.sh call (SK-01)' "$OB"
 present '**Gate-record rules (BM-GATE-05…09' 'the gate-record rules (SK-03)' "$OB"

@@ -3,6 +3,50 @@
 All notable changes to agent-skills are recorded here. Versioning is the plugin version in
 `.claude-plugin/plugin.json`.
 
+## 0.6.0: new skill `audit-build`, an independent re-review of landed tickets with a measurement mode
+
+A minor release that adds one skill and one optional build-memory record. **Backward-compatible:** nothing
+existing changes behavior, and `orchestrate-build` gains no hook or default schedule.
+
+### New: `audit-build`
+- **`mode=audit`:** a fresh-context critical re-review of tickets that have already landed. The scope can
+  be `since-last`, `last=N`, `tickets=…` or `range=…`. Each ticket gets:
+  - **Pass A:** a blind conformance check of every acceptance criterion against the code and tests;
+  - **Pass B:** a claims audit of the run ledger, PR body and closeout against what Pass A verified;
+  - **Pass C:** adversarial probes, including mutation of decisive checks, in a scratch checkout.
+
+  Pass D then runs once across the scope (duplication, sole-owner violations, interface drift,
+  invariants, regressions, records, process, blast radius). A separate verifier context checks every
+  finding before it is reported. Findings are routed to the build's own repair, return-pass or insert
+  paths; the skill never fixes anything itself.
+- **`mode=evaluate`:** a pre-registered measurement study of an implementer's work. It covers strata
+  fixed in advance, a baseline control, blinding with a check that it held, independent verification
+  (auditor precision), a duplicate-audit subset (Cohen's kappa, Lincoln–Petersen), optional seeded
+  defects for recall, Wilson intervals, and a cost-based audit policy with a re-evaluation trigger. The
+  point is to decide how much auditing is needed from evidence.
+- **Shared definitions:** `rubric.md` holds the severity, defect-class, origin and verdict definitions,
+  so findings are comparable across audits.
+- **Templates:** auditor and verifier briefs, the report, the evaluation plan, and a JSON Schema for
+  finding records.
+- **Scripts:**
+  - `audit-scope.sh` (bash 3.2+) resolves the ticket set from BUILD_INDEX and the previous audit record;
+  - `audit-stats.py` (python3 stdlib) aggregates findings, tickets and mutation datasets into the
+    evaluation tables.
+
+### build-memory
+- The PHASE LOG gains an optional `audit` kind (layout.md and the LEDGER template). Audit reports and
+  datasets live under `docs/build/reports/audits/` (append-only).
+
+### Tests
+- New `skills/audit-build/tests/run-tests.sh`, all offline. It covers:
+  - every scope selector and its error exits;
+  - previous-audit parsing;
+  - Q1 rates with Wilson intervals, precision, mutation kill rate, kappa and Lincoln–Petersen;
+  - input validation;
+  - enum consistency between the schema and the script.
+- `tests/lint-skills.sh` asserts the skill's read-only, verify-every-finding, no-silent-fix and
+  no-default-cadence rules, and evaluate mode's pre-registration step.
+
 ## 0.5.4 — build memory in a monorepo subproject (`BUILD_MEMORY_ROOT`); a loud memory root; the external-state read and its pre-authorizable operator and bot events
 
 A patch release for one defect class and two operating rules, found planning a build whose memory lives in a
