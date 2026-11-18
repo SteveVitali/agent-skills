@@ -381,7 +381,7 @@ The loop is portable; only this step is harness-specific. Bind to the best avail
 
 | Tier | Mechanism | Harnesses | Notes |
 |---|---|---|---|
-| **headless** *(recommended automation)* | `scripts/drive-build.sh` discovers a headless agent CLI and runs a fresh process per ticket | Claude Code (`claude -p`), Goose (`goose run`), Codex (`codex exec`), Gemini CLI (`gemini -p`) | Zero orchestrator accumulation; truest fresh context; full per-ticket rigor. Scope permissions and set a per-run budget/turn cap. |
+| **headless** *(recommended automation)* | `scripts/drive-build.sh` discovers a headless agent CLI and runs a fresh process per ticket | Claude Code (`claude -p`), Codex (`codex exec`), Devin CLI (`devin -p`), Cursor CLI (`cursor-agent -p`), Gemini CLI (`gemini -p`), Goose (`goose run`) — `--harness` picks one | Zero orchestrator accumulation; truest fresh context; full per-ticket rigor. Scope permissions and set a per-run budget/turn cap. |
 | **subagent** | one isolated sub-context per ticket | Claude Code (Agent tool); any harness with an isolated-subagent primitive | Simplest where available; keeps the orchestrator thin for free |
 | **manual** *(floor)* | print the command; human opens a fresh session | every harness, incl. IDE-only agents (Windsurf, Cursor) and a human with a terminal | No worse than the fully-manual predecessor; still fully ledger-driven and resumable |
 
@@ -394,12 +394,18 @@ next ticket.
 
 **Usage and the trace record (BM-TRACE-01).** Every worker appends one trace line per attempt at close
 (`implement-spec` §6.5 step 3): ticket, base and head commit, harness / model / effort / dispatch tier, skills
-version, wall time, tokens and compactions measured from the harness's own transcript, and how verification
-ended. `drive-build.sh` adds the dispatcher's view: each unit runs with `BUILD_TRACE_DISPATCH=headless` and
-`BUILD_TRACE_RUN=<run id>/iter-NNN`, and an auto-discovered `claude` runs with `--output-format stream-json
---verbose`, so the whole process's cost, turns and duration land as one line in the gitignored
-`<memoryRoot>/logs/drive-build/usage.jsonl`, joined to the trace by `dispatch_run` (`--no-usage` keeps the text
-mode). These records are what a later evaluation reads — `audit-build mode=evaluate` strata, cost per ticket,
+version, wall time, tokens and compactions measured from the harness's own session store (Claude Code, Codex,
+Devin CLI and Desktop; any other harness records `not-measured`), and how verification ended. `drive-build.sh`
+adds the dispatcher's view for any harness: `--harness claude|codex|devin|cursor|gemini|goose` (with `--model` and
+`--effort` mapped to each CLI's flags) runs the CLI in its structured mode where it has one (`claude
+--output-format stream-json`, `codex exec --json`, `devin --export <atif>`, `cursor-agent --output-format
+stream-json`, `gemini --output-format json`), measures the session that output names — or, for an `--agent-cmd`,
+the session found in the harness's store by worktree and time window — and appends one line (harness, sessions,
+wall time, exit code, tokens, compactions, cost and turns where reported) to the gitignored
+`<memoryRoot>/logs/drive-build/usage.jsonl`, joined to the trace by `dispatch_run`. Each unit runs with stdin
+closed, without the parent session's harness variables, and with `BUILD_TRACE_DISPATCH=headless` and
+`BUILD_TRACE_RUN=<run id>/iter-NNN`; `--usage-cmd` plugs in a harness with no adapter, `--no-usage` turns it off.
+These records are what a later evaluation reads — `audit-build mode=evaluate` strata, cost per ticket,
 replaying tickets at their base commit under another configuration — instead of mining transcripts that the
 harness may already have deleted.
 

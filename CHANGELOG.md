@@ -3,13 +3,13 @@
 All notable changes to agent-skills are recorded here. Versioning is the plugin version in
 `.claude-plugin/plugin.json`.
 
-## 0.7.0: a machine-readable trace line per ticket attempt (BM-TRACE-01); `drive-build.sh` captures `claude -p` usage
+## 0.7.0: a machine-readable trace line per ticket attempt (BM-TRACE-01), measured for Claude Code, Codex and Devin; per-unit usage from `drive-build.sh` for any harness
 
 A minor release that adds one committed record and one dispatcher log. The point is to evaluate the build skills
 across harness, model, effort and dispatch configurations from records the build already keeps, instead of mining
-harness transcripts. Harnesses delete those transcripts: Claude Code's default retention is 30 days. **Backward-compatible:** a repo without trace
-files validates exactly as before. A trace file is checked only where one exists, and the missing-trace warning
-fires only under the guards marker, for Closed: run ledgers created after the marker.
+harness transcripts (which harnesses delete: Claude Code's default retention is 30 days). **Backward-compatible:**
+a repo without trace files validates exactly as before. A trace file is checked only where one exists, and the
+missing-trace warning fires only under the guards marker, for Closed: run ledgers created after the marker.
 
 ### New: `build-memory/scripts/build-trace.py` (python3 stdlib)
 - **`record`** appends one `build-trace/1` JSON line per worker attempt to `<memoryRoot>/runs/<ID>.trace.jsonl`.
@@ -19,25 +19,47 @@ fires only under the guards marker, for Closed: run ledgers created after the ma
   - the branch, the base commit (from a flag, a merge-base or the run ledger's `Base:`), the head commit and the
     diff size;
   - the PR, plus the contract's path and its git blob at the base commit;
-  - the harness (the BM-HARNESS-01 label plus what was detected), model, effort and its source, and the dispatch
-    tier;
-  - the session id and the skills sha/version;
+  - the harness (the BM-HARNESS-01 label plus what was detected, with the running binary's version), model,
+    effort and its source, and the dispatch tier;
+  - the session (and agent) id and the skills sha/version;
   - start, close and wall time;
   - CI, live layer, BM-STATUS-01 layer and AC tallies.
+- **The harness is the nearest harness process above the script** (`claude`, `codex`, `devin`, Devin.app,
+  `cursor-agent`, `gemini`, `goose`). Variables are inherited: a Devin or Codex shell launched from Claude Code
+  still carries `CLAUDE_CODE_SESSION_ID`, `CLAUDE_EFFORT` and `AI_AGENT`, and Devin keeps an inherited `AI_AGENT`.
+  So each variable is read only for the harness that is actually running. `--harness` / `BUILD_TRACE_HARNESS`
+  override it, and the run ledger's `Harness:` label is the last fallback.
+- **Usage is measured from that harness's own session store, never typed in:**
+  - **Claude Code** (`CLAUDE_CODE_SESSION_ID`): the transcript holding this very `record` call, polled while the
+    harness writes it (0.2–3 s observed). A subagent worker counts that agent and its descendants (`meta.json`
+    `parentAgentId`). A headless worker counts the whole session. Otherwise it counts the branch's lines. Message
+    ids are deduplicated, and effort comes from `CLAUDE_EFFORT`.
+  - **Codex** (`CODEX_THREAD_ID`): the thread plus the threads it spawned. Totals come from the per-response
+    `token_usage_record` lines, which equal the thread's own cumulative `thread_token_usage`; `token_count`
+    undercounts long, compacted threads and is the fallback only for older rollouts. The script waits for the
+    record that follows its own call. Model and effort come from `turn_context`.
+  - **Devin CLI and Desktop** (one shared SQLite store, `CHISEL_SESSION_DB`, opened read-only; Devin commits the
+    call before running it):
+    - the script finds the node holding its own call;
+    - a subagent worker counts its chain plus the subagents it spawned (`Subagent agent_id=<id>` results), and the
+      lead chain counts the whole session;
+    - responses stored twice under one `message_id` are counted once;
+    - compactions are the `summarized_from` nodes;
+    - model and effort come from the session's model id (`swe-2-high`, `claude-opus-5-5-high`).
 
-  **Usage is measured, never typed in.** The script reads it from the harness's own transcript:
-  - **Claude Code** (`CLAUDE_CODE_SESSION_ID`): the script finds its own call in the session's transcripts,
-    polling while the harness writes it. A subagent worker counts that agent and its descendants (`meta.json`
-    `parentAgentId`). A headless worker counts the whole session. Otherwise it counts the branch's lines.
-    Messages are deduplicated by id, and effort comes from `CLAUDE_EFFORT`.
-  - **Codex** (`CODEX_THREAD_ID`): the thread plus the threads it spawned, with model and effort from
-    `turn_context`.
+    Queries go through the store's indexes only: the store measured here is 40 GB.
   - **Elsewhere:** `usage.source: not-measured` with the reason, or `--usage-json` for a figure another tool
     measured.
 
-  Totals use one `input_tokens` definition for both providers (uncached + cache read + cache write), alongside the
+  Totals use one `input_tokens` definition for every provider (uncached + cache read + cache write), alongside the
   cache split, output, reasoning, peak context, compactions and a per-model breakdown.
-- **`stream-usage` / `stream-result`** read a `claude -p --output-format stream-json` capture.
+- **`dispatch-usage`** prints one `build-dispatch/1` line for a unit a dispatcher ran:
+  - the session the unit's output names (claude/cursor stream-json, `codex --json`, gemini JSON) or its export
+    file names (devin ATIF);
+  - else the session found in the store by worktree and time window (`match: window`);
+  - measured from the store, else from the output's own usage;
+  - with wall time, exit code, and cost and turns where reported.
+- **`result`** prints a structured capture's final text.
 
 ### implement-spec
 - §6.5 step 3 (now "Trace, then validate") appends the trace line after CI is read and before the closeout commit.
@@ -47,44 +69,85 @@ fires only under the guards marker, for Closed: run ledgers created after the ma
 ### orchestrate-build
 - §2.3 confirms the trace line. A missing one is named in the repair entry and never written on the worker's
   behalf.
-- The Dispatch section describes the trace and the usage log.
-- `drive-build.sh`:
-  - runs an auto-discovered `claude` with `--output-format stream-json --verbose`;
-  - keeps the raw stream in `iter-NNN-<unit>.jsonl` and stderr in `.log`;
-  - prints the result text as before;
-  - appends one `build-dispatch/1` line per unit (session id, cost, turns, duration, tokens) to the gitignored
-    `logs/drive-build/usage.jsonl`;
-  - exports `BUILD_TRACE_DISPATCH=headless` and `BUILD_TRACE_RUN=<run id>/iter-NNN` to every unit, so the trace
-    joins the usage line;
-  - names the trace record in the prompt.
-
-  `--no-usage` keeps the old text mode, and an `--agent-cmd` whose output holds a stream-json result is
-  summarized the same way.
+- The Dispatch section describes the trace and the usage log, and the headless row lists Devin and Cursor.
+- `drive-build.sh` is harness-agnostic for usage:
+  - **`--harness claude|codex|devin|cursor|gemini|goose`**, with auto-discovery extended to `devin` and
+    `cursor-agent`. With `--agent-cmd` the harness is inferred from the command's first word.
+  - **`--model` / `--effort`** map to each CLI:
+    - claude: `--model` and `--effort`;
+    - codex: `-m` and `-c model_reasoning_effort=`;
+    - devin: `--model <id>-<effort>`;
+    - cursor and gemini: the model only.
+  - Each CLI runs in its structured mode: claude `--output-format stream-json --verbose`, codex `exec --json`,
+    devin `--export iter-NNN-<unit>.atif.json` (its text output is kept), cursor `--output-format stream-json`,
+    gemini `--output-format json`.
+  - The raw stream goes to `iter-NNN-<unit>.jsonl` and stderr to `.log`. The final text is printed as before.
+  - One `build-dispatch/1` line per unit goes to the gitignored `logs/drive-build/usage.jsonl`, with a summary line
+    on stdout.
+  - **Every unit runs with stdin closed.** `codex exec` otherwise blocks on "Reading additional input from stdin".
+  - **The parent session's harness variables are scrubbed** (`CLAUDE_CODE_*`, `CLAUDE_EFFORT`, `CODEX_*`,
+    `AI_AGENT`, `CHISEL_SESSION_DB`, …), so a nested harness never reads the outer session's.
+  - `BUILD_TRACE_DISPATCH=headless` and `BUILD_TRACE_RUN=<run id>/iter-NNN` are exported to every unit, so the trace
+    joins its usage line, and the prompt names the trace record.
+  - `--usage-cmd` plugs in a harness with no adapter: its JSON lines are appended, with the unit's context in
+    `BUILD_TRACE_*`. `--no-usage` turns measurement off.
+  - **Fix:** codex `--yolo` used `--ask-for-approval never`, which `codex exec` 0.170 rejects as an unknown flag.
+    It now maps to `--sandbox workspace-write -c sandbox_workspace_write.network_access=true -c
+    approval_policy=never`; network stays on for `git push` and `gh`.
 
 ### build-memory
-- `layout.md` defines BM-TRACE-01: the tree entry, the schema and key order, the usage sources and scopes, the
-  history rule (a `*.jsonl` byte prefix), the writer row and the validator rows.
+- `layout.md` defines BM-TRACE-01: the tree entry, the schema and key order, harness detection, the usage sources
+  and scopes, the dispatcher line, the history rule (a `*.jsonl` byte prefix), the writer row and the validator
+  rows.
 - `check-build-memory.sh` fails a trace line that is not a `build-trace/1` object naming the file's ticket, an
   `outcome`, a `dispatch`, an ISO `recorded_at` and a `usage` object. Under the guards marker it warns for a
   Closed: run ledger created after the marker that has no trace file.
 - The `build-README` template lists the trace file.
 
-### Tests
-- `skills/build-memory/tests/run-tests.sh` `test_trace` builds synthetic Claude Code and Codex transcripts with
-  known totals and runs under `env -i`. It covers:
-  - agent-tree scoping (a sibling subagent and the orchestrator's other-branch line excluded; a duplicated
-    message id counted once; a compaction counted);
-  - a Codex thread tree (an unrelated thread excluded);
-  - the run-ledger fallback (effort from the `-high` suffix, `not-measured` usage);
-  - that the second attempt only appends;
-  - four malformed lines the validator must flag;
-  - usage-error and scratch-mode exits;
-  - both stream modes.
+### Verification against live harnesses (dry runs; nothing written to any project)
+- **Claude Code worker:** `record` run from a live session found its own call after about 3 s. An Episteme-r2
+  session (16 transcripts) measured 374 calls, 133,921,285 input and 268,182 output tokens, matching an
+  independent count exactly.
+- **Codex worker:** `record` run by a live `codex exec` was detected by its process, with effort `low` from
+  `turn_context` and usage present. A tree of 88 threads matches its per-response records.
+- **Devin worker:** `record` run by a live `devin -p` was detected as `devin-cli 3000.12.57`, found its session and
+  read effort from the model id. Session totals match the session's own ATIF export exactly (41,245 prompt,
+  36,224 cached, 180 output tokens).
+- **Dispatcher:**
+  - real `claude -p` stream-json, `codex exec --json` and `devin --export` captures each resolve to their sessions,
+    by output and by window, and measure to the stream's own figures;
+  - the largest Devin session (151k nodes) measures in 12 s.
 
-  Mutating the dedupe or the agent-tree walk fails it.
-- `skills/orchestrate-build/tests/run-tests.sh` `test_usage_stream` puts a stub `claude` first on `PATH` and
-  checks the stream flags, `usage.jsonl` (one line per unit), the raw stream and stderr logs, the printed result
-  and summary, the `BUILD_TRACE_*` environment, the prompt sentence, and that `--no-usage` restores text mode.
+### Tests
+- `skills/build-memory/tests/run-tests.sh` `test_trace` runs under `env -i`, behind stand-in `claude` / `codex` /
+  `devin` processes and with another harness's variables leaked in. It uses synthetic stores with known totals:
+  - **Claude Code:** agent tree (sibling and other-branch lines excluded, a duplicated message id counted once,
+    a compaction counted).
+  - **Codex:** per-response records with a repeated id, a `token_count` that must be ignored, a child thread on
+    `token_count` only, and an unrelated thread.
+  - **Devin:** lead chain, worker, reviewer, sibling, orphan, a duplicate response and a compaction; both the
+    agent-tree and lead-chain cases.
+  - **Other cases:**
+    - the run-ledger fallback;
+    - append-only attempts;
+    - four malformed lines the validator must flag, and the guards-marker warning;
+    - usage-error and scratch-mode exits;
+    - `dispatch-usage` for all three stores (by output or export, by window, and the stream fallback);
+    - `result`.
+
+  Mutating the Devin descendant walk, the process detection or the Codex record reader fails it.
+- `skills/orchestrate-build/tests/run-tests.sh` `test_usage_stream` puts stub `claude`, `codex` and `devin` first
+  on `PATH`. It checks:
+  - each CLI's flags (including `--model` / `--effort` mapping and devin's `--export` before `-p`);
+  - one `usage.jsonl` line per unit, measured from a stub store (Codex rollout, Devin SQLite);
+  - the printed final text and summary;
+  - stdin closed even when drive-build's own stdin has data;
+  - `CLAUDE_CODE_SESSION_ID` scrubbed;
+  - `BUILD_TRACE_*` set;
+  - the prompt sentence;
+  - `--no-usage` and `--usage-cmd`.
+
+  Removing the stdin redirect, the scrub or devin's export fails it.
 - `tests/lint-skills.sh` asserts the §6.5 command, the measured-usage rule, the no-trace-on-the-worker's-behalf
   rule and the layout definition.
 - `.claude-plugin/marketplace.json` was still at 0.5.4 after 0.6.0; both manifests now read 0.7.0.

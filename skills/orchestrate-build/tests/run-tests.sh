@@ -534,19 +534,26 @@ test_external_state() {
 say "orchestrate-build self-test"
 test_ci_boundary
 # ── drive-build.sh usage capture (BM-TRACE-01) ──────────────────────────────────
-# An auto-discovered `claude` (a stub first on PATH) runs with --output-format stream-json --verbose; each unit's
-# stream lands in iter-NNN-<id>.jsonl, its result text is printed, a build-dispatch/1 line per unit goes to
-# usage.jsonl, and every unit sees BUILD_TRACE_DISPATCH / BUILD_TRACE_RUN. --no-usage restores the text mode.
+# Stub CLIs first on PATH. claude: an auto-discovered `claude` runs with --output-format stream-json --verbose;
+# its stream lands in iter-NNN-<id>.jsonl, the result text is printed, a build-dispatch/1 line per unit goes to
+# usage.jsonl. codex / devin (--harness, --model, --effort): their structured-output / export flags, the session
+# they name measured from the harness's store. Every unit: stdin closed, the parent session's harness variables
+# scrubbed, BUILD_TRACE_DISPATCH / BUILD_TRACE_RUN set. --no-usage restores the text mode.
 test_usage_stream() {
   local W CB L ok_before=$FAIL
   if ! command -v python3 >/dev/null 2>&1; then say "SKIP drive-build-usage (no python3)"; return 0; fi
   CB="$(mktemp -d)"
-  cat > "$CB/claude" <<STUB
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "\$STUB_LEDGER.claude-argv"
-printf '%s %s\n' "\${BUILD_TRACE_DISPATCH:-}" "\${BUILD_TRACE_RUN:-}" >> "\$STUB_LEDGER.claude-env"
+  # common stub prologue: record argv, env and stdin state, then close one ticket like implement-spec would
+  cat > "$CB/prologue.sh" <<STUB
+printf '%s\n' "\$*" >> "\$STUB_LEDGER.agent-argv"
+if read -r _line; then stdin=open; else stdin=closed; fi
+printf '%s %s %s %s\n' "\${BUILD_TRACE_DISPATCH:-}" "\${BUILD_TRACE_RUN:-}" "\${CLAUDE_CODE_SESSION_ID:-unset}" "\$stdin" >> "\$STUB_LEDGER.agent-env"
 next="\$(grep -m1 -E '^nextTicket:' "\$STUB_LEDGER" | awk '{print \$2}')"
 bash "$HERE/stub-agent.sh" "\$@" || exit 1
+STUB
+  cat > "$CB/claude" <<STUB
+#!/usr/bin/env bash
+. "$CB/prologue.sh"
 echo "stub diagnostics" >&2
 case " \$* " in
   *" stream-json "*)
@@ -555,35 +562,101 @@ case " \$* " in
   *) echo "closed \$next" ;;
 esac
 STUB
-  chmod +x "$CB/claude"
+  cat > "$CB/codex" <<STUB
+#!/usr/bin/env bash
+. "$CB/prologue.sh"
+mkdir -p "\$CODEX_HOME/sessions/2026/11/01"
+printf '{"type":"session_meta","payload":{"id":"th-%s","cwd":"/w","timestamp":"2026-11-01T10:00:00Z"}}\n{"type":"turn_context","payload":{"model":"gpt-stub","effort":"high"}}\n{"type":"token_usage_record","payload":{"response_id":"r1","usage":{"input_tokens":100,"cached_input_tokens":60,"output_tokens":7}}}\n' "\$next" \
+  > "\$CODEX_HOME/sessions/2026/11/01/rollout-2026-11-01T10-00-00-th-\$next.jsonl"
+printf '{"type":"thread.started","thread_id":"th-%s"}\n{"type":"item.completed","item":{"type":"agent_message","text":"codex closed %s"}}\n{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":60,"output_tokens":7}}\n' "\$next" "\$next"
+STUB
+  cat > "$CB/devin" <<STUB
+#!/usr/bin/env bash
+. "$CB/prologue.sh"
+exp=""; prev=""; for a in "\$@"; do [ "\$prev" = --export ] && exp="\$a"; prev="\$a"; done
+printf '{"schema_version":"ATIF-v1.7","session_id":"dv-%s","agent":{"model_name":"SWE"},"steps":[]}\n' "\$next" > "\$exp"
+python3 -I - "\$STUB_DEVIN_DB" "dv-\$next" <<'PY'
+import json, sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("INSERT INTO sessions VALUES (?, '/w', 'windsurf', 'swe-2-high', 'bypass', 0, 0, 1)", (sys.argv[2],))
+m = {"message_id": "m", "role": "assistant", "content": "",
+     "metadata": {"generation_model": "swe-2-high", "metrics": {"input_tokens": 5, "cache_read_tokens": 40, "output_tokens": 9}}}
+c.execute("INSERT INTO message_nodes (session_id, node_id, parent_node_id, chat_message, created_at) VALUES (?, 1, NULL, ?, 0)",
+          (sys.argv[2], json.dumps(m)))
+c.commit()
+PY
+echo "devin closed \$next"
+STUB
+  chmod +x "$CB/claude" "$CB/codex" "$CB/devin"
+  DB="$(mktemp -d)/sessions.db"
+  python3 -I -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.executescript('CREATE TABLE sessions (id TEXT, working_directory TEXT, backend_type TEXT, model TEXT, agent_mode TEXT, created_at INTEGER, last_activity_at INTEGER, main_chain_id INTEGER); CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, node_id INTEGER, parent_node_id INTEGER, chat_message TEXT, created_at INTEGER, metadata TEXT); CREATE TABLE subagent_heads (session_id TEXT, agent_id TEXT, chain_node_id INTEGER, updated_at INTEGER);')" "$DB"
+  ubuild() {   # ubuild <repo> [args…] — drive-build with the stub CLIs, a parent session's leaked variables and a stdin that has data
+    local R="$1"; shift
+    OUT="$(printf 'leak\n' | STUB_LEDGER="$R/docs/build/LEDGER.md" PATH="$CB:$STUBPATH" CODEX_HOME="$CODEXH" STUB_DEVIN_DB="$DB" \
+           CHISEL_SESSION_DB="$DB" CLAUDE_CODE_SESSION_ID=outer-session bash "$DRIVE" --ledger "$R/docs/build/LEDGER.md" \
+           --worktree "$R" --ci-interval 1 --ci-max-wait 0 --max-iters 6 --yolo "$@" 2>&1)"; RC=$?
+  }
+  CODEXH="$(mktemp -d)"
+
   W="$(mkrepo)"; green_stack; L="$W/docs/build/logs/drive-build"
-  OUT="$(STUB_LEDGER="$W/docs/build/LEDGER.md" PATH="$CB:$STUBPATH" bash "$DRIVE" --ledger "$W/docs/build/LEDGER.md" \
-         --worktree "$W" --ci-interval 1 --ci-max-wait 0 --max-iters 6 --yolo 2>&1)"; RC=$?
+  ubuild "$W"
   [ "$RC" -eq 0 ] || { fail "drive-build usage: exit=$RC (want 0)"; printf '%s\n' "$OUT" | tail -5 | sed 's/^/      /'; }
-  grep -qF -- '-p --permission-mode bypassPermissions --output-format stream-json --verbose' "$W/docs/build/LEDGER.md.claude-argv" \
+  grep -qF -- '-p --permission-mode bypassPermissions --output-format stream-json --verbose' "$W/docs/build/LEDGER.md.agent-argv" \
     || fail "drive-build usage: claude was not run with --output-format stream-json --verbose"
   [ "$(grep -c '"schema":"build-dispatch/1"' "$L/usage.jsonl" 2>/dev/null)" = 2 ] || fail "drive-build usage: usage.jsonl does not hold one line per unit"
-  for kw in '"ticket":"T1","iter":1' '"ticket":"T2","iter":2' '"session_id":"s-T1"' '"total_cost_usd":0.5' \
-            '"usage":{"input_tokens":6,"uncached_input_tokens":1,"cache_read_tokens":2,"cache_write_tokens":3,"output_tokens":4}'; do
+  for kw in '"ticket":"T1","iter":1' '"ticket":"T2","iter":2' '"harness":"claude-code","sessions":["s-T1"],"match":"output"' '"exit_code":0' \
+            '"cost_usd":0.5,"num_turns":3' \
+            '"source":"claude-code-stream","scope":"process","streams":1,"model_calls":1,"input_tokens":6,"uncached_input_tokens":1,"cache_read_tokens":2,"cache_write_tokens":3,"output_tokens":4'; do
     grep -qF -- "$kw" "$L/usage.jsonl" 2>/dev/null || fail "drive-build usage: usage.jsonl lacks $kw"
   done
   { [ -s "$L/iter-001-T1.jsonl" ] && grep -q '"type":"result"' "$L/iter-001-T1.jsonl"; } || fail "drive-build usage: no raw stream at iter-001-T1.jsonl"
   grep -qF 'stub diagnostics' "$L/iter-001-T1.log" 2>/dev/null || fail "drive-build usage: stderr not kept in iter-001-T1.log"
-  for kw in 'closed T1' 'drive-build: usage T1: cost_usd=0.5 turns=3'; do
+  for kw in 'closed T1' 'drive-build: usage T1: harness=claude session=s-T1 input_tokens=6 output_tokens=4'; do
     printf '%s' "$OUT" | grep -qF -- "$kw" || fail "drive-build usage: output lacks '$kw'"
   done
-  grep -qE '^headless [0-9]{8}T[0-9]{6}Z-[0-9]+/iter-001$' "$W/docs/build/LEDGER.md.claude-env" \
-    || fail "drive-build usage: unit 1 did not see BUILD_TRACE_DISPATCH=headless BUILD_TRACE_RUN=<run>/iter-001"
+  grep -qE '^headless [0-9]{8}T[0-9]{6}Z-[0-9]+/iter-001 unset closed$' "$W/docs/build/LEDGER.md.agent-env" \
+    || { fail "drive-build usage: unit 1 env/stdin wrong (want BUILD_TRACE_* set, CLAUDE_CODE_SESSION_ID scrubbed, stdin closed)"; head -1 "$W/docs/build/LEDGER.md.agent-env" | sed 's/^/      /'; }
   grep -qF 'build-trace.py record; BM-TRACE-01' "$W/docs/build/LEDGER.md.prompt" 2>/dev/null \
     || fail "drive-build usage: the prompt does not name the trace record"
 
   W="$(mkrepo)"; green_stack; L="$W/docs/build/logs/drive-build"
-  OUT="$(STUB_LEDGER="$W/docs/build/LEDGER.md" PATH="$CB:$STUBPATH" bash "$DRIVE" --ledger "$W/docs/build/LEDGER.md" \
-         --worktree "$W" --ci-interval 1 --ci-max-wait 0 --max-iters 6 --yolo --no-usage 2>&1)"; RC=$?
+  ubuild "$W" --harness codex --model gpt-stub --effort high
+  [ "$RC" -eq 0 ] || { fail "drive-build usage codex: exit=$RC (want 0)"; printf '%s\n' "$OUT" | tail -5 | sed 's/^/      /'; }
+  grep -qF -- 'exec --sandbox workspace-write -c sandbox_workspace_write.network_access=true -c approval_policy=never -m gpt-stub -c model_reasoning_effort=high --json' \
+    "$W/docs/build/LEDGER.md.agent-argv" || fail "drive-build usage codex: wrong codex flags ($(head -1 "$W/docs/build/LEDGER.md.agent-argv" | cut -c1-140))"
+  for kw in '"harness":"codex","sessions":["th-T1"],"match":"output"' '"model":"gpt-stub"' \
+            '"source":"codex-rollout","scope":"thread-tree","threads":1,"model_calls":1,"input_tokens":100,"uncached_input_tokens":40,"cache_read_tokens":60'; do
+    grep -qF -- "$kw" "$L/usage.jsonl" 2>/dev/null || fail "drive-build usage codex: usage.jsonl lacks $kw"
+  done
+  printf '%s' "$OUT" | grep -qF 'codex closed T1' || fail "drive-build usage codex: the last agent message was not printed"
+  grep -qE ' unset closed$' "$W/docs/build/LEDGER.md.agent-env" || fail "drive-build usage codex: env not scrubbed or stdin open"
+
+  W="$(mkrepo)"; green_stack; L="$W/docs/build/logs/drive-build"
+  ubuild "$W" --harness devin --model swe-2 --effort high
+  [ "$RC" -eq 0 ] || { fail "drive-build usage devin: exit=$RC (want 0)"; printf '%s\n' "$OUT" | tail -5 | sed 's/^/      /'; }
+  grep -qE -- '^--permission-mode dangerous --respect-workspace-trust false --model swe-2-high --export .*/iter-001-T1\.atif\.json -p You are a fresh session' \
+    "$W/docs/build/LEDGER.md.agent-argv" || fail "drive-build usage devin: wrong devin flags ($(head -1 "$W/docs/build/LEDGER.md.agent-argv" | cut -c1-160))"
+  for kw in '"harness":"devin","sessions":["dv-T1"],"match":"export"' '"model":"swe-2-high"' \
+            '"source":"devin-session-store","scope":"session","chains":1,"model_calls":1,"input_tokens":45,"uncached_input_tokens":5,"cache_read_tokens":40'; do
+    grep -qF -- "$kw" "$L/usage.jsonl" 2>/dev/null || fail "drive-build usage devin: usage.jsonl lacks $kw"
+  done
+  printf '%s' "$OUT" | grep -qF 'devin closed T1' || fail "drive-build usage devin: text output not shown"
+
+  W="$(mkrepo)"; green_stack; L="$W/docs/build/logs/drive-build"
+  ubuild "$W" --no-usage
   [ "$RC" -eq 0 ] || fail "drive-build usage --no-usage: exit=$RC (want 0)"
-  grep -qF 'stream-json' "$W/docs/build/LEDGER.md.claude-argv" && fail "drive-build usage --no-usage: still ran stream-json"
+  grep -qF 'stream-json' "$W/docs/build/LEDGER.md.agent-argv" && fail "drive-build usage --no-usage: still ran stream-json"
   [ -f "$L/usage.jsonl" ] && fail "drive-build usage --no-usage: wrote usage.jsonl"
   printf '%s' "$OUT" | grep -qF 'closed T1' || fail "drive-build usage --no-usage: text output not shown"
+
+  # --usage-cmd: a harness with no adapter appends whatever JSON its command prints, with the unit's context in env.
+  W="$(mkrepo)"; green_stack; L="$W/docs/build/logs/drive-build"
+  OUT="$(STUB_LEDGER="$W/docs/build/LEDGER.md" PATH="$STUBPATH" bash "$DRIVE" --ledger "$W/docs/build/LEDGER.md" \
+         --agent-cmd "bash $HERE/stub-agent.sh" --worktree "$W" --ci-interval 1 --ci-max-wait 0 --max-iters 6 \
+         --usage-cmd 'printf "noise\n{\"unit\":\"%s\",\"iter\":%s}\n" "$BUILD_TRACE_UNIT" "$BUILD_TRACE_ITER"' 2>&1)"; RC=$?
+  [ "$RC" -eq 0 ] || fail "drive-build usage --usage-cmd: exit=$RC (want 0)"
+  [ "$(cat "$L/usage.jsonl" 2>/dev/null)" = "$(printf '{"unit":"T1","iter":1}\n{"unit":"T2","iter":2}')" ] \
+    || fail "drive-build usage --usage-cmd: usage.jsonl is not the command's JSON lines ($(cat "$L/usage.jsonl" 2>/dev/null | tr '\n' ' '))"
   [ "$FAIL" -eq "$ok_before" ] && say "PASS drive-build-usage"
 }
 

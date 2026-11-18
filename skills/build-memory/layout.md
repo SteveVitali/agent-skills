@@ -470,11 +470,17 @@ code head the PR's CI read), `diff {files, insertions, deletions}`, `pr`, `spec 
 `effort_source`, `dispatch` (`headless | subagent | manual | unknown`), `session {id, agent_id?}`, `skills {sha,
 version, release?, dirty?}`, `started_at`, `closed_at`, `wall_s`, `usage`, `verification {ci, ci_status, live,
 layer, ac {met, met_engineered, partial, missed}}`, `dispatch_run` (joins `logs/drive-build/usage.jsonl`),
-`recorded_by`. `usage` is measured, never typed in: `{source: claude-code-transcript | codex-rollout,
-scope: session | agent-tree | branch | thread-tree, transcripts, model_calls, input_tokens (every prompt token:
-uncached + cache read + cache write), uncached_input_tokens, cache_read_tokens, cache_write_tokens,
-output_tokens, reasoning_tokens, peak_context_tokens, compactions, by_model}`, or `{source: supplied, …}` for a
-figure another tool measured, or `{source: not-measured, reason}`. Unknown values are `null`, never guessed. The
+`recorded_by`. The harness is the nearest harness process above the writer (an inherited variable such as
+`CLAUDE_CODE_SESSION_ID` or `AI_AGENT` may belong to an outer session, so it is read only for the harness that is
+running). `usage` is measured from that harness's own session store, never typed in: `{source:
+claude-code-transcript | codex-rollout | devin-session-store, scope: session | agent-tree | branch | thread-tree,
+transcripts | threads | chains, model_calls, input_tokens (every prompt token: uncached + cache read + cache
+write, the same definition for every provider), uncached_input_tokens, cache_read_tokens, cache_write_tokens,
+output_tokens, reasoning_tokens, peak_context_tokens, compactions, by_model}` — the worker's own agent and the
+subagents it spawned (`agent-tree`), or the whole session when the worker is the session — or `{source: supplied,
+…}` for a figure another tool measured, or `{source: not-measured, reason}`. A dispatcher's
+`logs/drive-build/usage.jsonl` holds `build-dispatch/1` lines with the same `usage` object per unit
+(`build-trace.py dispatch-usage`). Unknown values are `null`, never guessed. The
 file is a protected `*.jsonl` record (BM-HIST-01: byte prefix). The validator fails a line that is not a
 `build-trace/1` object naming the file's ticket, an `outcome`, a `dispatch`, an ISO `recorded_at` and a `usage`
 object, and — under the guards marker — warns for a Closed: run ledger created after the marker with no trace

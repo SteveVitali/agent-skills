@@ -526,9 +526,9 @@ in **one** closeout commit:
      --live <live verification> --layer <BM-STATUS-01 word> --ac met=<n>,met-engineered=<n>,partial=<n>,missed=<n>
    ```
    It reads `Started:`, `Harness:` and `Spec:` from the run ledger's header and the branch, head and diff from git,
-   detects the harness from its environment, and measures this run's tokens, peak context and compactions from the
-   harness's own transcript where it can (Claude Code, Codex); elsewhere it records `usage: not-measured` with the
-   reason. Never type usage figures in — pass `--usage-json <file>` only for a figure another tool measured.
+   names the harness by the nearest harness process above it (not by inherited variables), and measures this run's
+   tokens, peak context and compactions from that harness's own session store — Claude Code transcripts, Codex
+   rollouts, the Devin CLI/Desktop session database; elsewhere it records `usage: not-measured` with the reason. Never type usage figures in — pass `--usage-json <file>` only for a figure another tool measured.
    Then stage the closeout (step 4's `git add`), then
    `bash skills/build-memory/scripts/check-build-memory.sh .` and `check-build-memory.sh . --staged` (history mode,
    BM-HIST-01: the staged lines only append, at the regions' ends, with dates from the clock; in a monorepo

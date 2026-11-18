@@ -206,7 +206,7 @@ bash tests/run-tests.sh     # one PASS line per fixture; exit 0 iff all pass
 | `scripts/check-build-memory.sh` | the validator (BM-VALID-01): tree, history and planning modes |
 | `scripts/check-history.sh` | history mode (BM-HIST-01) — what a change adds or removes |
 | `scripts/adr-index.sh` | regenerate the ADR index (BM-ADR-02) |
-| `scripts/build-trace.py` | **appends** with `record`: one trace line per worker attempt to `runs/<ID>.trace.jsonl`, usage measured from the harness transcript (BM-TRACE-01); `stream-usage` / `stream-result` read a `claude -p` stream-json capture for `drive-build.sh` (python3 stdlib) |
+| `scripts/build-trace.py` | **appends** with `record`: one trace line per worker attempt to `runs/<ID>.trace.jsonl`, usage measured from the harness's own session store — Claude Code transcripts, Codex rollouts, the Devin session database (BM-TRACE-01); `dispatch-usage` / `result` give `drive-build.sh` one usage line and the final text per unit, for any harness (python3 stdlib) |
 | `scripts/migrate-legacy-scratch.sh` | **mutating** with `--apply`: legacy scratch → `docs/build/` |
 
 ## What this skill does NOT do
