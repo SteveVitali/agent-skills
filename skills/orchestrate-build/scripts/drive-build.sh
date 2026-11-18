@@ -6,30 +6,40 @@
 # implement-spec, or CAPSTONE), which updates the durable ledger and exits. The loop re-reads the ledger and
 # repeats until DONE / BLOCKED / paused. Intelligence stays in fresh contexts; sequencing stays here.
 #
-# Harness-agnostic: the ONLY harness-specific atom is the headless-invocation command, discovered from PATH or
-# passed with --agent-cmd. Works with Claude Code, Goose, Codex CLI, Gemini CLI, or any CLI that runs a prompt
-# non-interactively and exits.
+# Harness-agnostic: the ONLY harness-specific atom is the headless-invocation command — chosen with --harness,
+# discovered from PATH, or passed with --agent-cmd. Works with Claude Code, Codex CLI, Devin CLI, Cursor CLI,
+# Gemini CLI, Goose, or any CLI that runs a prompt non-interactively and exits.
 #
 # Usage:
-#   drive-build.sh --ledger <path> [--skill <name>] [--yolo] [--agent-cmd "<cmd>"]
-#                  [--worktree <path>] [--log-dir <path>] [--max-iters <n>]
+#   drive-build.sh --ledger <path> [--skill <name>] [--harness <name>] [--model <id>] [--effort <level>] [--yolo]
+#                  [--agent-cmd "<cmd>"] [--worktree <path>] [--log-dir <path>] [--max-iters <n>]
 #                  [--no-ci-gate] [--ci-interval <s>] [--ci-max-wait <s>] [--print-prompt]
+#                  [--no-usage] [--usage-cmd "<cmd>"]
 #
 #   --ledger      Path to the seeded build ledger (required).
 #   --skill       The driving skill each fresh unit follows (default: orchestrate-build). The
 #                 prompt names this skill; e.g. --skill synthesize-spec drives docs/research-ledger.md
 #                 (whose next-unit pointer is `nextUnit`) the same way. Resolved under the skills root.
-#   --yolo        Enable UNATTENDED WRITES by appending the discovered CLI's autonomy flag. Off by default:
-#                 without it, headless CLIs do not prompt — they silently DENY edits/commands, so a ticket makes
-#                 no changes and the loop stops at the no-progress guard. Per-CLI mapping (auto-discovery only):
+#   --harness     claude | codex | devin | cursor | gemini | goose — the CLI to run (default: the first of
+#                 claude, goose, codex, gemini, devin, cursor-agent on PATH). With --agent-cmd it names the
+#                 harness for usage measurement (default: inferred from the command's first word).
+#   --model / --effort  The model id and reasoning effort for every unit (default: the CLI's own default):
+#                   claude -> --model M --effort E          codex  -> -m M -c model_reasoning_effort=E
+#                   devin  -> --model M-E (Devin model ids carry the effort, e.g. swe-2-high)
+#                   cursor -> --model M                     gemini -> -m M          (no effort flag: a note)
+#   --yolo        Enable UNATTENDED WRITES by appending the CLI's autonomy flag. Off by default: without it,
+#                 headless CLIs do not prompt — they silently DENY edits/commands, so a ticket makes no changes
+#                 and the loop stops at the no-progress guard. Per-CLI mapping (not with --agent-cmd):
 #                   claude -> --permission-mode bypassPermissions   goose  -> GOOSE_MODE=auto
-#                   codex  -> --sandbox workspace-write --ask-for-approval never (workspace writes, no network)
-#                   gemini -> --approval-mode yolo
+#                   codex  -> --sandbox workspace-write -c sandbox_workspace_write.network_access=true
+#                             -c approval_policy=never   (workspace writes; network on, for git push and gh)
+#                   devin  -> --permission-mode dangerous --respect-workspace-trust false
+#                   cursor -> --force                               gemini -> --approval-mode yolo
 #                 Prefer configuring autonomy out-of-band (settings allowlist, GOOSE_MODE, a scoped --agent-cmd)
 #                 when you want a tighter posture than blanket bypass.
 #   --agent-cmd   Override the invocation (e.g. "claude -p --permission-mode acceptEdits"). Must accept the
-#                 prompt as a TRAILING POSITIONAL argument. With --agent-cmd you own the autonomy posture; --yolo
-#                 is ignored.
+#                 prompt as a TRAILING POSITIONAL argument. With --agent-cmd you own the autonomy posture and the
+#                 flags; --yolo, --model and --effort are ignored, and usage is read from the harness's store.
 #   --worktree    Directory to run each invocation in. Default: the ledger's buildWorktree.
 #                 A committed ledger outside <toplevel>/docs/build (a monorepo subproject) exports
 #                 BUILD_MEMORY_ROOT=<its toplevel-relative dir> to every unit and names it in the prompt
@@ -48,6 +58,24 @@
 #   --print-prompt  The manual tier (a harness with no headless CLI): run the same checks (status enum,
 #                 block, pause, CI gate), then print the fresh-session prompt for the next unit and exit
 #                 0 without dispatching. Paste it into a new session of any harness; re-run after the unit.
+#   --no-usage    Do not measure usage and run each CLI in its plain text mode.
+#   --usage-cmd   For a harness with no adapter: after each unit run this shell command with BUILD_TRACE_UNIT,
+#                 _ITER, _RUN, _SINCE, _UNTIL, _CWD, _OUTPUT and _HARNESS set; every JSON line it prints is
+#                 appended to usage.jsonl as is.
+#
+# Usage (BM-TRACE-01): after every unit one build-dispatch/1 line — harness, session ids, wall time, exit code,
+# tokens, compactions, cost and turns where the CLI reports them — is appended to the gitignored
+# <log-dir>/usage.jsonl by build-memory/scripts/build-trace.py dispatch-usage (python3). The CLI is run in its
+# structured mode where it has one, the raw output kept in iter-NNN-<unit>.jsonl (stderr in .log) and its final
+# text printed as before: claude `--output-format stream-json --verbose`, codex `exec --json`, cursor
+# `--output-format stream-json`, gemini `--output-format json`; devin keeps its text output and writes
+# `--export iter-NNN-<unit>.atif.json`. The session the output names (or, for an --agent-cmd, the session found
+# in the harness's store by worktree and time window) is then measured from the store: Claude Code transcripts,
+# Codex rollouts, the Devin session database.
+# Every unit runs with stdin closed (`codex exec` otherwise waits on it), without the parent session's harness
+# variables (CLAUDE_CODE_SESSION_ID, CLAUDE_EFFORT, CODEX_THREAD_ID, AI_AGENT, … — a nested harness would
+# otherwise read the outer session's), and with BUILD_TRACE_DISPATCH=headless and BUILD_TRACE_RUN=<run id>/iter-NNN
+# (an operator-set value is kept), so the trace line the worker appends at close joins its usage.jsonl line.
 #
 # Exit codes: 0 = DONE, cleanly paused, gate-pending, or (--print-prompt) prompt printed;
 #             2 = BLOCKED / off-enum projectStatus / CI not green / no-progress (human needed);
@@ -59,7 +87,8 @@
 set -euo pipefail
 
 LEDGER="" ; AGENT_CMD="" ; MAX_ITERS=100 ; WORKTREE="" ; LOG_DIR="" ; YOLO=0 ; SKILL_NAME="orchestrate-build"
-CI_GATE=auto ; CI_INTERVAL=60 ; CI_MAX_WAIT=2700 ; PRINT_PROMPT=0
+CI_GATE=auto ; CI_INTERVAL=60 ; CI_MAX_WAIT=2700 ; PRINT_PROMPT=0 ; USAGE=1 ; STREAM=0 ; EXPORT=0
+HARNESS="" ; MODEL="" ; EFFORT="" ; USAGE_CMD="" ; PROMPT_FLAG=""
 
 usage() { grep -E '^#( |$)' "$0" | sed -E 's/^# ?//'; }
 
@@ -77,6 +106,11 @@ while [ $# -gt 0 ]; do
     --ci-interval) CI_INTERVAL="${2:-}"; shift 2 ;;
     --ci-max-wait) CI_MAX_WAIT="${2:-}"; shift 2 ;;
     --print-prompt) PRINT_PROMPT=1; shift ;;
+    --no-usage)  USAGE=0; shift ;;
+    --usage-cmd) USAGE_CMD="${2:-}"; shift 2 ;;
+    --harness)   HARNESS="${2:-}"; shift 2 ;;
+    --model)     MODEL="${2:-}"; shift 2 ;;
+    --effort)    EFFORT="${2:-}"; shift 2 ;;
     -h|--help)   usage; exit 0 ;;
     *) echo "drive-build.sh: unknown arg: $1 (try --help)" >&2; exit 1 ;;
   esac
@@ -119,30 +153,84 @@ status_val() {
   printf '%s\n' "$line" | sed -E "s/^[[:space:]]*${1}:[[:space:]]*//; s/[[:space:]]*#.*$//; s/[[:space:]]*$//"
 }
 
-# Build the base agent argv (everything up to, but not including, the trailing prompt).
+# The harness: its name (claude | codex | devin | cursor | gemini | goose) and CLI binary.
+harness_of() {   # harness_of <command word> → harness name, or empty
+  case "$(basename "$1")" in
+    claude) echo claude ;; codex) echo codex ;; devin) echo devin ;; cursor-agent) echo cursor ;;
+    gemini) echo gemini ;; goose) echo goose ;; *) echo "" ;;
+  esac
+}
+cli_of() { case "$1" in cursor) echo cursor-agent ;; *) echo "$1" ;; esac; }
+case "$HARNESS" in
+  ""|claude|codex|devin|cursor|gemini|goose) : ;;
+  claude-code) HARNESS=claude ;;
+  *) echo "drive-build.sh: --harness '$HARNESS' is not one of claude|codex|devin|cursor|gemini|goose" >&2; exit 1 ;;
+esac
+
+# Build the base agent argv (everything up to, but not including, the per-unit flags and the trailing prompt).
 BASE_ARGV=() ; AUTONOMY_NOTE=""
 if [ "$PRINT_PROMPT" -eq 1 ]; then
   BASE_ARGV=(manual)                                  # no agent CLI: the operator starts the session
 elif [ -n "$AGENT_CMD" ]; then
   read -r -a BASE_ARGV <<< "$AGENT_CMD"
+  [ -n "$HARNESS" ] || HARNESS="$(harness_of "${BASE_ARGV[0]}")"
   [ "$YOLO" -eq 1 ] && echo "drive-build.sh: note: --yolo is ignored with --agent-cmd; bake autonomy into your command." >&2
-elif command -v claude >/dev/null 2>&1; then
-  BASE_ARGV=(claude -p) ; AUTONOMY_NOTE="--permission-mode bypassPermissions"
-  [ "$YOLO" -eq 1 ] && BASE_ARGV+=(--permission-mode bypassPermissions)
-elif command -v goose >/dev/null 2>&1; then
-  BASE_ARGV=(goose run --no-session -q) ; AUTONOMY_NOTE="GOOSE_MODE=auto"
-  [ "$YOLO" -eq 1 ] && BASE_ARGV=(env GOOSE_MODE=auto "${BASE_ARGV[@]}")
-  BASE_ARGV+=(-t)                                     # goose takes the prompt after -t
-elif command -v codex >/dev/null 2>&1; then
-  BASE_ARGV=(codex exec) ; AUTONOMY_NOTE="--sandbox workspace-write --ask-for-approval never"
-  [ "$YOLO" -eq 1 ] && BASE_ARGV+=(--sandbox workspace-write --ask-for-approval never)
-elif command -v gemini >/dev/null 2>&1; then
-  BASE_ARGV=(gemini) ; AUTONOMY_NOTE="--approval-mode yolo"
-  [ "$YOLO" -eq 1 ] && BASE_ARGV+=(--approval-mode yolo)
-  BASE_ARGV+=(-p)                                     # gemini takes the prompt after -p
+  { [ -n "$MODEL" ] || [ -n "$EFFORT" ]; } && echo "drive-build.sh: note: --model/--effort are ignored with --agent-cmd; put them in your command." >&2
 else
-  echo "drive-build.sh: no supported agent CLI (claude|goose|codex|gemini) on PATH; pass --agent-cmd" >&2
-  exit 1
+  if [ -z "$HARNESS" ]; then
+    for c in claude goose codex gemini devin cursor-agent; do
+      if command -v "$c" >/dev/null 2>&1; then HARNESS="$(harness_of "$c")"; break; fi
+    done
+    [ -n "$HARNESS" ] || { echo "drive-build.sh: no supported agent CLI (claude|goose|codex|gemini|devin|cursor-agent) on PATH; pass --harness or --agent-cmd" >&2; exit 1; }
+  fi
+  command -v "$(cli_of "$HARNESS")" >/dev/null 2>&1 || { echo "drive-build.sh: --harness $HARNESS: '$(cli_of "$HARNESS")' is not on PATH" >&2; exit 1; }
+  NOEFFORT=0
+  case "$HARNESS" in
+    claude)
+      BASE_ARGV=(claude -p) ; AUTONOMY_NOTE="--permission-mode bypassPermissions"
+      [ "$YOLO" -eq 1 ] && BASE_ARGV+=(--permission-mode bypassPermissions)
+      [ -n "$MODEL" ] && BASE_ARGV+=(--model "$MODEL")
+      [ -n "$EFFORT" ] && BASE_ARGV+=(--effort "$EFFORT")
+      if [ "$USAGE" -eq 1 ]; then BASE_ARGV+=(--output-format stream-json --verbose); STREAM=1; fi ;;
+    codex)
+      BASE_ARGV=(codex exec)
+      AUTONOMY_NOTE="--sandbox workspace-write -c sandbox_workspace_write.network_access=true -c approval_policy=never"
+      [ "$YOLO" -eq 1 ] && BASE_ARGV+=(--sandbox workspace-write -c sandbox_workspace_write.network_access=true -c approval_policy=never)
+      [ -n "$MODEL" ] && BASE_ARGV+=(-m "$MODEL")
+      [ -n "$EFFORT" ] && BASE_ARGV+=(-c "model_reasoning_effort=$EFFORT")
+      if [ "$USAGE" -eq 1 ]; then BASE_ARGV+=(--json); STREAM=1; fi ;;
+    devin)
+      BASE_ARGV=(devin) ; AUTONOMY_NOTE="--permission-mode dangerous --respect-workspace-trust false"
+      [ "$YOLO" -eq 1 ] && BASE_ARGV+=(--permission-mode dangerous --respect-workspace-trust false)
+      if [ -n "$MODEL" ]; then
+        DM="$MODEL"
+        if [ -n "$EFFORT" ]; then
+          case "$DM" in *-minimal|*-low|*-medium|*-high|*-xhigh|*-max) echo "drive-build.sh: note: --model $DM already names an effort; --effort $EFFORT ignored" >&2 ;; *) DM="$DM-$EFFORT" ;; esac
+        fi
+        BASE_ARGV+=(--model "$DM")
+      elif [ -n "$EFFORT" ]; then NOEFFORT=1; fi
+      [ "$USAGE" -eq 1 ] && EXPORT=1
+      PROMPT_FLAG="-p" ;;                             # devin takes the prompt after -p (per-unit flags go first)
+    cursor)
+      BASE_ARGV=(cursor-agent -p) ; AUTONOMY_NOTE="--force"
+      [ "$YOLO" -eq 1 ] && BASE_ARGV+=(--force)
+      [ -n "$MODEL" ] && BASE_ARGV+=(--model "$MODEL")
+      [ -n "$EFFORT" ] && NOEFFORT=1
+      if [ "$USAGE" -eq 1 ]; then BASE_ARGV+=(--output-format stream-json); STREAM=1; fi ;;
+    gemini)
+      BASE_ARGV=(gemini) ; AUTONOMY_NOTE="--approval-mode yolo"
+      [ "$YOLO" -eq 1 ] && BASE_ARGV+=(--approval-mode yolo)
+      [ -n "$MODEL" ] && BASE_ARGV+=(-m "$MODEL")
+      [ -n "$EFFORT" ] && NOEFFORT=1
+      if [ "$USAGE" -eq 1 ]; then BASE_ARGV+=(--output-format json); STREAM=1; fi
+      PROMPT_FLAG="-p" ;;                             # gemini takes the prompt after -p
+    goose)
+      BASE_ARGV=(goose run --no-session -q) ; AUTONOMY_NOTE="GOOSE_MODE=auto"
+      [ "$YOLO" -eq 1 ] && BASE_ARGV=(env GOOSE_MODE=auto "${BASE_ARGV[@]}")
+      { [ -n "$MODEL" ] || [ -n "$EFFORT" ]; } && echo "drive-build.sh: note: --model/--effort are not mapped for goose; set them in its config" >&2
+      PROMPT_FLAG="-t" ;;                             # goose takes the prompt after -t
+  esac
+  [ "$NOEFFORT" -eq 1 ] && echo "drive-build.sh: note: --effort has no $HARNESS flag here; pass a model id that carries it (--model)" >&2
 fi
 
 if [ "$PRINT_PROMPT" -ne 1 ] && [ "$YOLO" -ne 1 ] && [ -z "$AGENT_CMD" ]; then
@@ -182,7 +270,50 @@ else CI_NOTE="OFF (explicit opt-out --no-ci-gate)"; fi
 LEDGER_HARNESS="$(status_val harness)"
 echo "drive-build: ledger=$LEDGER harness(ledger)=${LEDGER_HARNESS:-<not recorded>}"
 if [ -n "$MEM_REL" ]; then echo "drive-build: memory root=$MEM_REL (BUILD_MEMORY_ROOT, exported to every unit)"; fi
-echo "drive-build: agent=[${BASE_ARGV[*]}] yolo=$YOLO worktree=${WORKTREE:-<none>} logs=$LOG_DIR max-iters=$MAX_ITERS ci-gate=$CI_NOTE"
+echo "drive-build: agent=[${BASE_ARGV[*]}] harness=${HARNESS:-<unknown>} yolo=$YOLO worktree=${WORKTREE:-<none>} logs=$LOG_DIR max-iters=$MAX_ITERS ci-gate=$CI_NOTE"
+
+# Dispatch usage (BM-TRACE-01): one build-dispatch/1 line per unit, appended to the gitignored
+# <log-dir>/usage.jsonl. Never fatal: a missing python3, an unknown harness or an unreadable store is a note, and
+# the raw output stays in place.
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+TRACE_DISPATCH_SET="${BUILD_TRACE_DISPATCH:-}" ; TRACE_RUN_SET="${BUILD_TRACE_RUN:-}"
+TRACE_PY="$SKILLS_ROOT/build-memory/scripts/build-trace.py"
+UCWD="$(cd "${WORKTREE:-.}" 2>/dev/null && pwd -P || pwd -P)"
+# The parent session's harness variables never reach a unit: a nested harness would read the outer session's.
+SCRUB=(env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_CHILD_SESSION
+       -u CLAUDE_CODE_SESSION_ATTENDED -u CLAUDE_CODE_MESSAGING_SOCKET -u CLAUDE_CODE_MESSAGING_TOKEN
+       -u CLAUDE_CODE_EXECPATH -u CLAUDE_EFFORT -u CLAUDE_PID -u CODEX_THREAD_ID -u CODEX_SESSION_ID
+       -u CODEX_TOOL_CALL_ID -u CODEX_CI -u AI_AGENT -u CHISEL_SESSION_DB -u DEVIN_TRACEPARENT)
+record_usage() {   # record_usage <unit> <iter> <exit code> <since> <until>
+  local out line ins outs sess
+  [ "$USAGE" -eq 1 ] || return 0
+  if [ -n "$USAGE_CMD" ]; then
+    BUILD_TRACE_UNIT="$1" BUILD_TRACE_ITER="$2" BUILD_TRACE_RUN="$RUN_ID/iter-$ITER" BUILD_TRACE_SINCE="$4" \
+      BUILD_TRACE_UNTIL="$5" BUILD_TRACE_CWD="$UCWD" BUILD_TRACE_OUTPUT="$OUT_LOG" BUILD_TRACE_HARNESS="$HARNESS" \
+      bash -c "$USAGE_CMD" < /dev/null 2>/dev/null | grep -E '^[[:space:]]*\{' >> "$LOG_DIR/usage.jsonl" || true
+    return 0
+  fi
+  if [ -z "$HARNESS" ]; then
+    echo "drive-build: note: usage not measured — unknown harness for '${BASE_ARGV[0]}' (pass --harness or --usage-cmd)" >&2
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1 || [ ! -f "$TRACE_PY" ]; then
+    echo "drive-build: note: python3 or build-trace.py not found — usage not measured; raw output kept at $OUT_LOG" >&2
+    return 0
+  fi
+  [ "$STREAM" -eq 1 ] && { python3 -I "$TRACE_PY" result --harness "$HARNESS" --output "$JLOG" 2>/dev/null || true; }
+  out=(--output "$OUT_LOG"); [ "$EXPORT" -eq 1 ] && out+=(--export "$ELOG")
+  if line="$(python3 -I "$TRACE_PY" dispatch-usage --harness "$HARNESS" --cwd "$UCWD" --since "$4" --until "$5" \
+               "${out[@]}" --exit-code "$3" --ticket "$1" --iter "$2" --run "$RUN_ID" 2>/dev/null)" && [ -n "$line" ]; then
+    printf '%s\n' "$line" >> "$LOG_DIR/usage.jsonl"
+    sess="$(printf '%s' "$line" | sed -nE 's/.*"sessions":\[([^]]*)\].*/\1/p' | tr -d '"')"
+    ins="$(printf '%s' "$line" | sed -nE 's/.*"usage":\{[^}]*"input_tokens":([0-9]+).*/\1/p')"
+    outs="$(printf '%s' "$line" | sed -nE 's/.*"usage":\{[^}]*"output_tokens":([0-9]+).*/\1/p')"
+    echo "drive-build: usage $1: harness=$HARNESS session=${sess:-?} input_tokens=${ins:-?} output_tokens=${outs:-?} → $LOG_DIR/usage.jsonl"
+  else
+    echo "drive-build: note: could not measure usage for $1 (raw output: $OUT_LOG)" >&2
+  fi
+}
 
 # CI gate (BM-CI-01): the loop itself refuses to dispatch past a red, pending or unreadable PR.
 # Runs whenever lastCompleted names a ticket not yet verified in this run — so a restart re-reads it.
@@ -249,7 +380,8 @@ run-ledger header. The ledger's CURRENT STATE \`harness:\` reads '${LEDGER_HARNE
 a different harness or model than yours, you are a harness switch (BM-HARNESS-01) — allowed only at this boundary \
 and only on the operator's words: record a PHASE LOG \`harness-switch\` entry quoting them, or stop and ask. \
 Before you stop on a block, a gate or a usage-limit event, or after the last row under a chain-table banner, \
-write the operator digest (orchestrate-build §4, scripts/digest.sh).$MEM_PROMPT"
+write the operator digest (orchestrate-build §4, scripts/digest.sh). A ticket's closeout appends its trace line \
+(implement-spec §6.5, build-memory/scripts/build-trace.py record; BM-TRACE-01).$MEM_PROMPT"
 
   if [ "$PRINT_PROMPT" -eq 1 ]; then
     echo "drive-build: checks passed — start ONE fresh session (any harness) with this prompt, then re-run --print-prompt:"
@@ -259,17 +391,32 @@ write the operator digest (orchestrate-build §4, scripts/digest.sh).$MEM_PROMPT
     exit 0
   fi
 
-  ARGV=( "${BASE_ARGV[@]}" "$PROMPT" )
-  LOG="$LOG_DIR/iter-$(printf '%03d' "$i")-${NEXT}.log"
+  ITER="$(printf '%03d' "$i")"
+  LOG="$LOG_DIR/iter-${ITER}-${NEXT}.log" ; JLOG="$LOG_DIR/iter-${ITER}-${NEXT}.jsonl"
+  ELOG="$LOG_DIR/iter-${ITER}-${NEXT}.atif.json"
+  UNIT_ARGS=() ; [ "$EXPORT" -eq 1 ] && UNIT_ARGS=(--export "$ELOG")
+  ARGV=( "${BASE_ARGV[@]}" ${UNIT_ARGS[@]+"${UNIT_ARGS[@]}"} ${PROMPT_FLAG:+"$PROMPT_FLAG"} "$PROMPT" )
+  export BUILD_TRACE_DISPATCH="${TRACE_DISPATCH_SET:-headless}" BUILD_TRACE_RUN="${TRACE_RUN_SET:-$RUN_ID/iter-$ITER}"
+  T_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
   set +e
-  if [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ]; then
-    ( cd "$WORKTREE" && "${ARGV[@]}" ) 2>&1 | tee "$LOG"
+  if [ "$STREAM" -eq 1 ]; then
+    # Structured output: stdout is the event stream (kept whole), stderr the diagnostics; the final text is printed after.
+    if [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ]; then ( cd "$WORKTREE" && "${SCRUB[@]}" "${ARGV[@]}" < /dev/null ) > "$JLOG" 2> "$LOG"
+    else "${SCRUB[@]}" "${ARGV[@]}" < /dev/null > "$JLOG" 2> "$LOG"; fi
+    rc=$?
+    [ -s "$LOG" ] && cat "$LOG" >&2
+  elif [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ]; then
+    ( cd "$WORKTREE" && "${SCRUB[@]}" "${ARGV[@]}" < /dev/null ) 2>&1 | tee "$LOG"
+    rc=${PIPESTATUS[0]}
   else
-    "${ARGV[@]}" 2>&1 | tee "$LOG"
+    "${SCRUB[@]}" "${ARGV[@]}" < /dev/null 2>&1 | tee "$LOG"
+    rc=${PIPESTATUS[0]}
   fi
-  rc=${PIPESTATUS[0]}
   set -e
+  T_END="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  OUT_LOG="$LOG"; [ "$STREAM" -eq 1 ] && OUT_LOG="$JLOG"
+  record_usage "$NEXT" "$i" "$rc" "$T_START" "$T_END"
 
   # Progress = the ledger moved. If it didn't, diagnose (don't spin).
   NEW_STATUS="$(status_val projectStatus | awk '{print $1}')" ; NEW_NEXT="$(status_val nextTicket)" ; NEW_BLOCKED="$(status_val blockedOn)"
@@ -286,13 +433,13 @@ write the operator digest (orchestrate-build §4, scripts/digest.sh).$MEM_PROMPT
         fi
         echo "drive-build: unit '$NEXT' made no ledger progress (agent exit=$rc)." >&2
         echo "  Most common cause: writes were denied because autonomy is off — re-run with --yolo." >&2
-        echo "  See the agent transcript: $LOG" >&2
+        echo "  See the agent transcript: $OUT_LOG" >&2
         exit 2 ;;
-      *) echo "drive-build: unit '$NEXT' set blockedOn='$NEW_BLOCKED' (agent exit=$rc) — human needed. See $LOG." >&2
+      *) echo "drive-build: unit '$NEXT' set blockedOn='$NEW_BLOCKED' (agent exit=$rc) — human needed. See $OUT_LOG." >&2
          exit 2 ;;
     esac
   fi
-  [ "$rc" -eq 0 ] || echo "drive-build: note: agent exited $rc but the ledger advanced; continuing. See $LOG." >&2
+  [ "$rc" -eq 0 ] || echo "drive-build: note: agent exited $rc but the ledger advanced; continuing. See $OUT_LOG." >&2
 done
 
 echo "drive-build: hit --max-iters=$MAX_ITERS without reaching DONE. Re-run to continue." >&2

@@ -3,3 +3,6 @@
 
 # Agent scratch / unpublished design documents (never committed: they cite private repos)
 .agents/
+
+# Python bytecode
+__pycache__/

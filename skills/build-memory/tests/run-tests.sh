@@ -737,6 +737,253 @@ test_monorepo() {
   [ "$ok" = 1 ] && say "PASS monorepo"
 }
 
+# ── BM-TRACE-01: build-trace.py record / stream modes + the validator's trace check ───────────────
+# Synthetic Claude Code and Codex transcripts with known totals; env -i so the test session's own harness
+# variables never leak into what is measured.
+test_trace() {
+  local ok=1 W C X D HB S out rc base line kw o
+  if ! command -v python3 >/dev/null 2>&1; then say "SKIP trace (no python3)"; return 0; fi
+  local TP="$SCRIPTS/build-trace.py"
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; gitify "$W"
+  base="$(git -C "$W" rev-parse HEAD)"
+  ( cd "$W" && git checkout -q -b demo/t9 && printf 'x\n' > feature.txt && git add feature.txt \
+      && git -c user.email=t@t -c user.name=t commit -qm feature ) >/dev/null 2>&1
+  # Stand-in harness processes: the script names the harness by the nearest harness process above it, so each
+  # case runs under a wrapper named claude / codex / devin (whatever harness runs this test suite is further up).
+  HB="$(tmp)/hbin"; mkdir -p "$HB"
+  for h in claude codex devin; do
+    printf '#!/bin/bash\n[ "$1" = --version ] && { echo "%s 7.7.7"; exit 0; }\n"$@"\n' "$h" > "$HB/$h"; chmod +x "$HB/$h"
+  done
+  # Every case also carries another harness's leaked variables, which must be ignored.
+  local LEAK="CLAUDE_CODE_SESSION_ID=leaked CLAUDE_EFFORT=max CODEX_THREAD_ID=leaked AI_AGENT=claude-code_1-0-0_agent"
+
+  # ── Claude Code: main session (orchestrator, other branch) + worker subagent aW (holds the record call) + its
+  # reviewer aR (parentAgentId aW) + an unrelated sibling aX that must not be counted.
+  C="$(tmp)"; S="$C/projects/-tmp-demo/sess-1"; mkdir -p "$S/subagents"
+  cat > "$C/projects/-tmp-demo/sess-1.jsonl" <<'EOF'
+{"type":"assistant","gitBranch":"demo/base","cwd":"/w/demo","timestamp":"2026-11-01T09:00:00Z","message":{"id":"m0","model":"claude-opus-5-5","usage":{"input_tokens":10,"cache_read_input_tokens":100,"cache_creation_input_tokens":0,"output_tokens":5}}}
+EOF
+  cat > "$S/subagents/agent-aW.jsonl" <<'EOF'
+{"type":"assistant","gitBranch":"demo/t9","timestamp":"2026-11-01T10:00:00Z","message":{"id":"m1","model":"claude-opus-5-5","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":2,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200,"output_tokens":50,"output_tokens_details":{"thinking_tokens":7}}}}
+{"type":"assistant","gitBranch":"demo/t9","timestamp":"2026-11-01T10:00:01Z","message":{"id":"m1","model":"claude-opus-5-5","content":[{"type":"text","text":"same message, second block"}],"usage":{"input_tokens":2,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200,"output_tokens":50,"output_tokens_details":{"thinking_tokens":7}}}}
+{"type":"system","subtype":"compact_boundary","gitBranch":"demo/t9","timestamp":"2026-11-01T10:05:00Z"}
+{"type":"assistant","gitBranch":"demo/t9","timestamp":"2026-11-01T10:10:00Z","message":{"id":"m2","model":"claude-opus-5-5","content":[{"type":"tool_use","name":"Bash","input":{"command":"python3 -I /x/build-memory/scripts/build-trace.py record --ticket T1 --outcome done"}}],"usage":{"input_tokens":3,"cache_read_input_tokens":2000,"cache_creation_input_tokens":300,"output_tokens":60}}}
+EOF
+  printf '{"agentType":"general-purpose"}\n' > "$S/subagents/agent-aW.meta.json"
+  cat > "$S/subagents/agent-aR.jsonl" <<'EOF'
+{"type":"assistant","gitBranch":"demo/t9","timestamp":"2026-11-01T10:07:00Z","message":{"id":"m3","model":"claude-haiku-5-5","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":500,"output_tokens":20}}}
+EOF
+  printf '{"parentAgentId":"aW"}\n' > "$S/subagents/agent-aR.meta.json"
+  cat > "$S/subagents/agent-aX.jsonl" <<'EOF'
+{"type":"assistant","gitBranch":"demo/t9","timestamp":"2026-11-01T10:08:00Z","message":{"id":"m4","model":"claude-opus-5-5","usage":{"input_tokens":9999,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":9999}}}
+EOF
+  printf '{"parentAgentId":null}\n' > "$S/subagents/agent-aX.meta.json"
+  line="$(cd "$W" && env -i PATH="$PATH" HOME="$C" CLAUDE_CONFIG_DIR="$C" CLAUDE_CODE_SESSION_ID=sess-1 CLAUDE_EFFORT=high \
+    AI_AGENT=claude-code_9-9-9_agent CODEX_THREAD_ID=leaked "$HB/claude" python3 -I "$TP" record --ticket T1 --outcome done --pr 7 \
+    --base-sha "$base" --ci 'ci: pass #7@abc1234 (web 1)' --live n-a --layer engineered \
+    --ac met=3,met-engineered=1,partial=0,missed=0 --started 2026-11-01T09:30:00Z --now 2026-11-01T10:30:00Z 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || { fail "trace: claude record exited $rc"; ok=0; }
+  out="$W/docs/build/runs/T1.trace.jsonl"
+  [ "$(grep -c . "$out" 2>/dev/null)" = 1 ] || { fail "trace: claude record did not append exactly one line to runs/T1.trace.jsonl"; ok=0; }
+  for kw in '"schema":"build-trace/1"' '"recorded_at":"2026-11-01T10:30:00Z"' '"ticket":"T1"' '"attempt":1' '"outcome":"done"' \
+            '"branch":"demo/t9"' "\"base\":{\"sha\":\"$base\",\"source\":\"flag\"" '"diff":{"files":1,"insertions":1,"deletions":0}' \
+            '"pr":7' '"name":"claude-code","version":"7.7.7","detected_from":"process:claude"' '"model":"claude-opus-5-5"' \
+            '"effort":"high","effort_source":"CLAUDE_EFFORT"' '"session":{"id":"sess-1","agent_id":"aW"}' '"wall_s":3600' \
+            '"source":"claude-code-transcript","scope":"agent-tree","transcripts":2,"model_calls":3' \
+            '"input_tokens":4006,"uncached_input_tokens":6,"cache_read_tokens":3000,"cache_write_tokens":1000' \
+            '"output_tokens":130,"reasoning_tokens":7,"peak_context_tokens":2303,"compactions":1' \
+            '"claude-haiku-5-5":{"model_calls":1,"input_tokens":501' '"ci_status":"pass"' \
+            '"ac":{"met":3,"met_engineered":1,"partial":0,"missed":0}' '"dispatch":"unknown"'; do
+    printf '%s' "$line" | grep -qF -- "$kw" || { fail "trace: claude record lacks $kw"; ok=0; }
+  done
+  bash "$SCRIPTS/check-build-memory.sh" "$W" >/dev/null 2>&1 || { fail "trace: a valid trace file failed the validator"; ok=0; }
+
+  # ── Codex: root thread th1 (per-response token_usage_record lines, one repeated; its token_count lines must not
+  # be used) + child th2 (token_count only, an older rollout) counted; unrelated th3 not. Attempt 2 only appends.
+  X="$(tmp)"; mkdir -p "$X/sessions/2026/11/01"
+  cat > "$X/sessions/2026/11/01/rollout-2026-11-01T10-00-00-th1.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"id":"th1","cwd":"/w/codex","timestamp":"2026-11-01T10:00:00Z","cli_version":"0.170.0"}}
+{"type":"turn_context","payload":{"model":"gpt-x","effort":"xhigh"}}
+{"type":"token_usage_record","payload":{"response_id":"r1","usage":{"input_tokens":1000,"cached_input_tokens":800,"cache_write_input_tokens":0,"output_tokens":50,"reasoning_output_tokens":10}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":99999,"cached_input_tokens":0,"output_tokens":1},"last_token_usage":{"input_tokens":99999}}}}
+{"type":"compacted","payload":{}}
+{"type":"response_item","payload":{"type":"custom_tool_call","input":"await tools.exec_command({cmd:\"python3 /x/build-trace.py record --ticket T1 --outcome blocked\"})"}}
+{"type":"token_usage_record","payload":{"response_id":"r2","usage":{"input_tokens":2000,"cached_input_tokens":1700,"cache_write_input_tokens":0,"output_tokens":70,"reasoning_output_tokens":20}}}
+{"type":"token_usage_record","payload":{"response_id":"r2","usage":{"input_tokens":2000,"cached_input_tokens":1700,"cache_write_input_tokens":0,"output_tokens":70,"reasoning_output_tokens":20}}}
+EOF
+  cat > "$X/sessions/2026/11/01/rollout-2026-11-01T10-05-00-th2.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"id":"th2","parent_thread_id":"th1"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":500,"cached_input_tokens":100,"output_tokens":20,"reasoning_output_tokens":5},"last_token_usage":{"input_tokens":500}}}}
+EOF
+  cat > "$X/sessions/2026/11/01/rollout-2026-11-01T10-06-00-th3.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"id":"th3"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":77777,"cached_input_tokens":0,"output_tokens":7},"last_token_usage":{"input_tokens":77777}}}}
+EOF
+  local first; first="$(cat "$out")"
+  line="$(cd "$W" && env -i PATH="$PATH" HOME="$X" CODEX_HOME="$X" CODEX_THREAD_ID=th1 BUILD_TRACE_DISPATCH=headless \
+    BUILD_TRACE_RUN=r1/iter-002 CLAUDE_CODE_SESSION_ID=leaked CLAUDE_EFFORT=max AI_AGENT=claude-code_1-0-0_agent \
+    "$HB/codex" python3 -I "$TP" record --ticket T1 --outcome blocked --now 2026-11-01T11:00:00Z 2>/dev/null)"
+  [ "$(grep -c . "$out")" = 2 ] || { fail "trace: codex record did not append a second line"; ok=0; }
+  [ "$(head -n 1 "$out")" = "$first" ] || { fail "trace: the second record rewrote the first line (byte prefix)"; ok=0; }
+  CODEX_EXPECT='"input_tokens":3500,"uncached_input_tokens":900,"cache_read_tokens":2600,"cache_write_tokens":0,"output_tokens":140,"reasoning_tokens":35,"peak_context_tokens":2000,"compactions":1'
+  for kw in '"attempt":2' '"outcome":"blocked"' '"name":"codex","version":"7.7.7","detected_from":"process:codex"' '"model":"gpt-x"' \
+            '"effort":"xhigh","effort_source":"turn_context"' '"session":{"id":"th1"}' '"dispatch":"headless"' '"dispatch_run":"r1/iter-002"' \
+            '"source":"codex-rollout","scope":"thread-tree","threads":2,"model_calls":3' "$CODEX_EXPECT"; do
+    printf '%s' "$line" | grep -qF -- "$kw" || { fail "trace: codex record lacks $kw"; ok=0; }
+  done
+
+  # ── Devin: a session store with the lead chain (spawns aW and aX), the worker subagent aW (holds the record call;
+  # one response stored twice; one compaction; spawns aR), its reviewer aR, the sibling aX and an orphan chain —
+  # the worker's trace counts aW + aR only. A record call on the lead chain counts the whole session.
+  D="$(tmp)/sessions.db"
+  python3 -I - "$D" <<'PYEOF'
+import json, sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.executescript("""
+CREATE TABLE sessions (id TEXT PRIMARY KEY, working_directory TEXT NOT NULL, backend_type TEXT NOT NULL, model TEXT NOT NULL,
+  agent_mode TEXT NOT NULL, created_at INTEGER NOT NULL, last_activity_at INTEGER NOT NULL, title TEXT, main_chain_id INTEGER,
+  metadata TEXT);
+CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, node_id INTEGER NOT NULL,
+  parent_node_id INTEGER, chat_message TEXT NOT NULL, created_at INTEGER NOT NULL, metadata TEXT, UNIQUE(session_id, node_id));
+CREATE TABLE subagent_heads (session_id TEXT NOT NULL, agent_id TEXT NOT NULL, chain_node_id INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL, PRIMARY KEY (session_id, agent_id));
+""")
+c.execute("INSERT INTO sessions VALUES ('dv-1','/w/dv','windsurf','claude-opus-5-5-high','bypass',1793530800,1793534400,NULL,4,NULL)")
+def node(nid, par, role, mid=None, model=None, metrics=None, content="", calls=None, summ=None):
+    msg = {"message_id": mid or "x%d" % nid, "role": role, "content": content}
+    if calls: msg["tool_calls"] = [{"id": "c%d" % nid, "name": "exec", "arguments": {"command": calls}}]
+    if metrics: msg["metadata"] = {"metrics": dict(zip(("input_tokens", "cache_read_tokens", "cache_creation_tokens",
+                                                       "output_tokens", "context_input_tokens"), metrics)),
+                                   "generation_model": model}
+    c.execute("INSERT INTO message_nodes (session_id,node_id,parent_node_id,chat_message,created_at,metadata) "
+              "VALUES ('dv-1',?,?,?,1793531000,?)", (nid, par, json.dumps(msg),
+              json.dumps({"summarized_from": summ}) if summ is not None else None))
+node(1, None, "system", content="You are Devin")
+node(2, 1, "assistant", "m2", "claude-opus-5-5-high", (10, 100, None, 5, 110))
+node(3, 2, "tool", content="Subagent agent_id=aW completed successfully: done")
+node(5, 3, "tool", content="Subagent agent_id=aX completed successfully: done")
+node(4, 5, "assistant", "m4", content="", calls="python3 -I /x/build-trace.py record --ticket T4 --outcome done")
+node(10, None, "system", content="You are a subagent of Devin")
+node(11, 10, "assistant", "m11", "claude-opus-5-5-high", (2, 1000, 200, 50, 1202))
+node(12, 10, "assistant", "m11", "claude-opus-5-5-high", (2, 1000, 200, 50, 1202))
+node(13, 11, "assistant", "m13", "claude-opus-5-5-high", (3, 2000, 300, 60, 2303),
+     calls="python3 -I /x/build-trace.py record --ticket T3 --outcome done")
+node(14, 13, "tool", content="Subagent agent_id=aR completed successfully: reviewed")
+node(15, 14, "assistant", "m15", content="<summary>", summ=13)
+node(20, None, "system", content="You are a subagent of Devin")
+node(21, 20, "assistant", "m21", "swe-2-high", (1, 0, 500, 20, 501))
+node(30, None, "system", content="You are a subagent of Devin")
+node(31, 30, "assistant", "m31", "claude-opus-5-5-high", (9999, 0, 0, 9999, 9999))
+node(40, None, "system", content="You are a subagent of Devin")
+node(41, 40, "assistant", "m41", "claude-opus-5-5-high", (7777, 0, 0, 7777, 7777))
+c.executemany("INSERT INTO subagent_heads VALUES ('dv-1',?,?,0)", [("aW", 15), ("aR", 21), ("aX", 31)])
+c.commit()
+PYEOF
+  line="$(cd "$W" && env -i PATH="$PATH" HOME="$X" CHISEL_SESSION_DB="$D" AI_AGENT=devin_3000-12-57_agent $LEAK \
+    "$HB/devin" python3 -I "$TP" record --ticket T3 --outcome done --out "$(tmp)/t3.jsonl" 2>/dev/null)"
+  local DEVIN_TREE='"input_tokens":4006,"uncached_input_tokens":6,"cache_read_tokens":3000,"cache_write_tokens":1000,"output_tokens":130,"reasoning_tokens":null,"peak_context_tokens":2303,"compactions":1'
+  for kw in '"name":"devin-cli","version":"7.7.7","detected_from":"process:devin"' '"model":"claude-opus-5-5-high"' \
+            '"effort":"high","effort_source":"model-id"' '"session":{"id":"dv-1","agent_id":"aW"}' \
+            '"source":"devin-session-store","scope":"agent-tree","chains":2,"model_calls":3' "$DEVIN_TREE" \
+            '"swe-2-high":{"model_calls":1,"input_tokens":501'; do
+    printf '%s' "$line" | grep -qF -- "$kw" || { fail "trace: devin worker record lacks $kw"; ok=0; }
+  done
+  line="$(cd "$W" && env -i PATH="$PATH" HOME="$X" CHISEL_SESSION_DB="$D" "$HB/devin" python3 -I "$TP" record --ticket T4 \
+    --outcome done --out "$(tmp)/t4.jsonl" 2>/dev/null)"
+  local DEVIN_ALL='"model_calls":6,"input_tokens":21892,"uncached_input_tokens":17792,"cache_read_tokens":3100,"cache_write_tokens":1000,"output_tokens":17911'
+  for kw in '"session":{"id":"dv-1"}' '"scope":"session","chains":5' "$DEVIN_ALL"; do
+    printf '%s' "$line" | grep -qF -- "$kw" || { fail "trace: devin lead-chain record lacks $kw"; ok=0; }
+  done
+
+  # ── No session store reachable (e.g. a desktop agent with nothing exposed): harness/model/tier from the run
+  # ledger's Harness: line, effort from the model-id suffix, base from its Base: line; usage not-measured.
+  printf '# T2 run ledger\n\n- **Harness:** devin-desktop/swe-2-high/subagent · **Base:** `main` @ `%s`\n- **Started:** 2026-11-01T08:00:00Z\n\n## Plan\n' \
+    "$(printf '%s' "$base" | cut -c1-8)" > "$W/docs/build/runs/T2.md"
+  line="$(cd "$W" && env -i PATH="$PATH" HOME="$X" CHISEL_SESSION_DB="$X/none.db" BUILD_TRACE_WAIT_S=0 python3 -I "$TP" record \
+    --harness devin-desktop --ticket T2 --outcome done --dry-run --now 2026-11-01T09:00:00Z 2>/dev/null)"
+  for kw in '"label":"devin-desktop/swe-2-high/subagent","name":"devin-desktop"' '"model":"swe-2-high"' \
+            '"effort":"high","effort_source":"model-suffix"' '"dispatch":"subagent"' '"source":"run-ledger"' \
+            '"wall_s":3600' '"usage":{"source":"not-measured","reason":"devin: no session store at'; do
+    printf '%s' "$line" | grep -qF -- "$kw" || { fail "trace: run-ledger fallback lacks $kw"; ok=0; }
+  done
+  [ -f "$W/docs/build/runs/T2.trace.jsonl" ] && { fail "trace: --dry-run wrote a file"; ok=0; }
+  rm -f "$W/docs/build/runs/T2.md"
+
+  # ── Validator: each malformed line is a trace violation naming the file and BM-TRACE-01.
+  local bad
+  for bad in 'not json' '{"schema":"build-trace/1","ticket":"T9","outcome":"done","dispatch":"manual","recorded_at":"2026-11-01T00:00:00Z","usage":{}}' \
+             '{"schema":"build-trace/1","ticket":"T1","outcome":"merged","dispatch":"manual","recorded_at":"2026-11-01T00:00:00Z","usage":{}}' \
+             '{"schema":"build-trace/1","ticket":"T1","outcome":"done","dispatch":"manual","recorded_at":"2026-11-01T00:00:00Z"}'; do
+    cp "$out" "$out.keep"; printf '%s\n' "$bad" >> "$out"
+    rc=0; o="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)" || rc=$?
+    { [ "$rc" -eq 1 ] && printf '%s' "$o" | grep -q 'runs/T1.trace.jsonl line 3: .*BM-TRACE-01'; } \
+      || { fail "trace: validator did not flag line 3 ($bad) (exit $rc)"; ok=0; }
+    mv "$out.keep" "$out"
+  done
+  bash "$SCRIPTS/check-build-memory.sh" "$W" >/dev/null 2>&1 || { fail "trace: restored trace file failed the validator"; ok=0; }
+
+  # ── Usage errors exit 1; scratch mode without --out exits 2.
+  rc=0; python3 -I "$TP" record --ticket 'a b' --outcome done >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] || { fail "trace: a malformed ticket id exited $rc (want 1)"; ok=0; }
+  local Z; Z="$(tmp)/plain"; mkdir -p "$Z"; git -C "$Z" init -q
+  rc=0; ( cd "$Z" && env -i PATH="$PATH" HOME="$Z" AGENT_SCRATCH_DIR="$Z/.s" python3 -I "$TP" record --ticket T1 --outcome done ) >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || { fail "trace: scratch mode without --out exited $rc (want 2)"; ok=0; }
+
+  # ── dispatch-usage: the session a unit's output names is measured from the store; without one, the store is
+  # searched by worktree + time window; with no store entry, the output's own usage is used.
+  local SJ; SJ="$(tmp)/s.jsonl"
+  cat > "$SJ" <<'EOF'
+{"type":"system","subtype":"init","session_id":"sess-1","model":"claude-opus-5-5"}
+{"type":"result","subtype":"success","is_error":false,"num_turns":12,"duration_ms":61000,"total_cost_usd":1.25,"result":"T1 closed: PR #7","session_id":"sess-1","usage":{"input_tokens":4,"cache_read_input_tokens":900,"cache_creation_input_tokens":100,"output_tokens":70}}
+EOF
+  dusage() { env -i PATH="$PATH" HOME="$X" CLAUDE_CONFIG_DIR="$C" CODEX_HOME="$X" CHISEL_SESSION_DB="$D" \
+               python3 -I "$TP" dispatch-usage --ticket T1 --iter 3 --run r1 --now 2026-11-01T12:00:00Z "$@" 2>/dev/null; }
+  line="$(dusage --harness claude --output "$SJ" --cwd /w/demo --since 2026-11-01T08:59:00Z --until 2026-11-01T11:00:00Z --exit-code 0)"
+  for kw in '"schema":"build-dispatch/1"' '"ticket":"T1","iter":3,"run":"r1","harness":"claude-code","sessions":["sess-1"],"match":"output"' \
+            '"exit_code":0' '"cost_usd":1.25,"num_turns":12' '"source":"claude-code-transcript","scope":"session","transcripts":4,"model_calls":5'; do
+    printf '%s' "$line" | grep -qF -- "$kw" || { fail "trace: dispatch-usage (claude) lacks $kw"; ok=0; }
+  done
+  line="$(dusage --harness claude-code --cwd /w/demo --since 2026-11-01T08:59:00Z --until 2026-11-01T09:01:00Z)"
+  printf '%s' "$line" | grep -qF '"sessions":["sess-1"],"match":"window"' || { fail "trace: dispatch-usage (claude) did not find the session by window"; ok=0; }
+  sed 's/sess-1/sess-gone/g' "$SJ" > "$SJ.2"
+  line="$(dusage --harness claude --output "$SJ.2" --cwd /nowhere --since 2026-11-01T08:59:00Z --until 2026-11-01T09:01:00Z)"
+  printf '%s' "$line" | grep -qF '"source":"claude-code-stream","scope":"process","streams":1,"model_calls":1,"input_tokens":1004' \
+    || { fail "trace: dispatch-usage (claude) did not fall back to the stream's usage"; ok=0; }
+  [ "$(python3 -I "$TP" result --harness claude --output "$SJ")" = "T1 closed: PR #7" ] || { fail "trace: result (claude) did not print the result text"; ok=0; }
+  printf '%s\n' '{"type":"thread.started","thread_id":"th1"}' '{"type":"item.completed","item":{"type":"agent_message","text":"codex done"}}' \
+    '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}' > "$SJ.codex"
+  line="$(dusage --harness codex --output "$SJ.codex" --since 2026-11-01T10:00:00Z --until 2026-11-01T11:00:00Z)"
+  for kw in '"harness":"codex","sessions":["th1"],"match":"output"' "$CODEX_EXPECT" '"model":"gpt-x"'; do
+    printf '%s' "$line" | grep -qF -- "$kw" || { fail "trace: dispatch-usage (codex) lacks $kw"; ok=0; }
+  done
+  line="$(dusage --harness codex --cwd /w/codex --since 2026-11-01T09:59:00Z --until 2026-11-01T10:01:00Z)"
+  printf '%s' "$line" | grep -qF '"sessions":["th1"],"match":"window"' || { fail "trace: dispatch-usage (codex) did not find the thread by window"; ok=0; }
+  [ "$(python3 -I "$TP" result --harness codex --output "$SJ.codex")" = "codex done" ] || { fail "trace: result (codex) did not print the last agent message"; ok=0; }
+  printf '{"schema_version":"ATIF-v1.7","session_id":"dv-1","agent":{"model_name":"Claude Opus 5.5 High"},"steps":[]}\n' > "$SJ.atif"
+  line="$(dusage --harness devin --output /dev/null --export "$SJ.atif" --since 2026-11-01T10:00:00Z --until 2026-11-01T11:00:00Z)"
+  for kw in '"harness":"devin","sessions":["dv-1"],"match":"export"' '"model":"claude-opus-5-5-high"' "$DEVIN_ALL"; do
+    printf '%s' "$line" | grep -qF -- "$kw" || { fail "trace: dispatch-usage (devin) lacks $kw"; ok=0; }
+  done
+  line="$(dusage --harness devin --cwd /w/dv --since 2026-11-01T10:59:00Z --until 2026-11-01T11:01:00Z)"
+  printf '%s' "$line" | grep -qF '"sessions":["dv-1"],"match":"window"' || { fail "trace: dispatch-usage (devin) did not find the session by window"; ok=0; }
+  line="$(dusage --harness goose --output /dev/null --since 2026-11-01T10:00:00Z --until 2026-11-01T11:00:00Z)"
+  printf '%s' "$line" | grep -qF '"usage":{"source":"not-measured"' || { fail "trace: dispatch-usage (goose) did not read not-measured"; ok=0; }
+
+  # ── Guards marker: a Closed: run ledger created after the marker without a trace file warns (never fails); one
+  # created before the marker (v2-clean's T1, here without its trace) does not.
+  local G; G="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$G"; gitify "$G"
+  printf '<!-- build-memory-guards: 1 -->\n' >> "$G/docs/build/README.md"
+  ( cd "$G" && git add -A && git -c user.email=t@t -c user.name=t commit -qm guards ) >/dev/null 2>&1
+  o="$(bash "$SCRIPTS/check-build-memory.sh" "$G" 2>&1)"
+  printf '%s' "$o" | grep -qF 'trace:' && { fail "trace: a run ledger older than the guards marker drew a trace warning"; ok=0; }
+  printf '# T3 — run ledger\n- **Harness:** claude-code/claude-opus-5-5/headless\n- **Closed:** 2026-11-01T10:00:00Z\n\n## Plan\n' > "$G/docs/build/runs/T3.md"
+  rc=0; o="$(bash "$SCRIPTS/check-build-memory.sh" "$G" --now 2026-11-02T00:00:00Z 2>&1)" || rc=$?
+  printf '%s' "$o" | grep -qF '~ trace: 1 closed run ledger(s) created after the guards marker have no runs/<ID>.trace.jsonl (first: T3.md)' \
+    || { fail "trace: a new Closed: run ledger without a trace did not warn"; printf '%s\n' "$o" | grep -i trace | sed 's/^/      /'; ok=0; }
+  printf '%s' "$o" | grep -qE '^ *- trace:' && { fail "trace: a missing trace file was a violation (want a warning)"; ok=0; }
+  [ "$ok" = 1 ] && say "PASS trace"
+}
+
 test_clean
 test_violations
 test_legacy
@@ -757,6 +1004,7 @@ test_reqcov
 test_passed_gate_deferrals
 test_positional_status
 test_monorepo
+test_trace
 
 if [ "$FAIL" -eq 0 ]; then
   say "ALL PASS"

@@ -82,7 +82,8 @@ appendix == file set when present; `LEDGER.md` key set + order and `nextTicket`;
 `req_id_pattern` resolve; size + secret scans; the ledger budget and shape, BM-LEDGER-08; the
 `kind` of 7-column GATE DECISIONS rows and scoped pre-authorizations, BM-GATE-05/-09; the
 CURRENT STATE vocabularies; stale orient text; record dates later than the clock; BUILD_INDEX
-row shape; readout guard sentences; run-ledger `Harness:` lines; `living-pin?` tests). The PHASE
+row shape; readout guard sentences; run-ledger `Harness:` lines; `runs/<ID>.trace.jsonl` lines,
+BM-TRACE-01; `living-pin?` tests). The PHASE
 LOG parser reports what it evaluated, and exits 3 rather than pass vacuously. The human summary
 lists each violation and warning; the JSON report (`build-memory-check/2`: input identity, counts,
 diagnostics) goes to `--json PATH` or a unique temp file named on the last line. **A failure is
@@ -205,6 +206,7 @@ bash tests/run-tests.sh     # one PASS line per fixture; exit 0 iff all pass
 | `scripts/check-build-memory.sh` | the validator (BM-VALID-01): tree, history and planning modes |
 | `scripts/check-history.sh` | history mode (BM-HIST-01) — what a change adds or removes |
 | `scripts/adr-index.sh` | regenerate the ADR index (BM-ADR-02) |
+| `scripts/build-trace.py` | **appends** with `record`: one trace line per worker attempt to `runs/<ID>.trace.jsonl`, usage measured from the harness's own session store — Claude Code transcripts, Codex rollouts, the Devin session database (BM-TRACE-01); `dispatch-usage` / `result` give `drive-build.sh` one usage line and the final text per unit, for any harness (python3 stdlib) |
 | `scripts/migrate-legacy-scratch.sh` | **mutating** with `--apply`: legacy scratch → `docs/build/` |
 
 ## What this skill does NOT do

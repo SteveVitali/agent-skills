@@ -236,7 +236,8 @@ there is no orchestrator, which is exactly how a build ends with a ledger that n
 reports a pushed PR + evidence report, **confirm** rather than advance:
 1. The ledger's `CURRENT STATE` advanced (`lastCompleted` = this ticket, `nextTicket` = the next chain row,
    `chainTip` advanced for a chained ticket) and a fixed-shape `PHASE LOG` "done" entry was appended.
-2. `BUILD_INDEX.md` has this ticket's row and `docs/build/runs/<ID>.md` exists.
+2. `BUILD_INDEX.md` has this ticket's row, `docs/build/runs/<ID>.md` exists, and `runs/<ID>.trace.jsonl` gained
+   this attempt's line (BM-TRACE-01).
 3. `bash <skills>/build-memory/scripts/check-build-memory.sh .` exits 0, and so does its history mode over
    the ticket's commits, `check-build-memory.sh . --range <chainTip before the ticket>..<chainTip now>`
    (BM-HIST-01: protected records only gained lines, at their ends, with dates from the clock).
@@ -282,7 +283,9 @@ reports a pushed PR + evidence report, **confirm** rather than advance:
    `foreign-commits`. No author is accepted without the row, and there is no default author list.
 If any of 1–3 is missing (an older worker, a scratch-mode run, or an interruption), repair it as a PHASE LOG
 `repair` entry that names the gap (`repair — close: <which item> (<worker harness>, why)`), then re-run the
-validator. Never back-fill a `done` entry for work you did not verify. A second close repair in the same round
+validator. Never back-fill a `done` entry for work you did not verify, and never write a trace line on the
+worker's behalf: its harness, model and usage are the worker's to record, so a missing one is named in the
+repair entry and stays missing. A second close repair in the same round
 sets `blockedOn: worker close protocol broken (<ids>)`: fix the worker, not the symptom.
 **Never fabricate green.** If the worker blocked, self-review stayed red, CI is not green, or an agentic metric
 regressed: set `blockedOn`, record it, do NOT advance `nextTicket`, STOP. A pending gate is a `RETURN PASS` row,
@@ -378,7 +381,7 @@ The loop is portable; only this step is harness-specific. Bind to the best avail
 
 | Tier | Mechanism | Harnesses | Notes |
 |---|---|---|---|
-| **headless** *(recommended automation)* | `scripts/drive-build.sh` discovers a headless agent CLI and runs a fresh process per ticket | Claude Code (`claude -p`), Goose (`goose run`), Codex (`codex exec`), Gemini CLI (`gemini -p`) | Zero orchestrator accumulation; truest fresh context; full per-ticket rigor. Scope permissions and set a per-run budget/turn cap. |
+| **headless** *(recommended automation)* | `scripts/drive-build.sh` discovers a headless agent CLI and runs a fresh process per ticket | Claude Code (`claude -p`), Codex (`codex exec`), Devin CLI (`devin -p`), Cursor CLI (`cursor-agent -p`), Gemini CLI (`gemini -p`), Goose (`goose run`) — `--harness` picks one | Zero orchestrator accumulation; truest fresh context; full per-ticket rigor. Scope permissions and set a per-run budget/turn cap. |
 | **subagent** | one isolated sub-context per ticket | Claude Code (Agent tool); any harness with an isolated-subagent primitive | Simplest where available; keeps the orchestrator thin for free |
 | **manual** *(floor)* | print the command; human opens a fresh session | every harness, incl. IDE-only agents (Windsurf, Cursor) and a human with a terminal | No worse than the fully-manual predecessor; still fully ledger-driven and resumable |
 
@@ -388,6 +391,23 @@ non-interactive prompt mode, otherwise the `manual` tier. For `manual`, `drive-b
 exact fresh-session prompt for the next unit without dispatching anything: start **one new session** with it,
 let it run that unit and stop, then re-run `--print-prompt`. Never continue a finished unit's session into the
 next ticket.
+
+**Usage and the trace record (BM-TRACE-01).** Every worker appends one trace line per attempt at close
+(`implement-spec` §6.5 step 3): ticket, base and head commit, harness / model / effort / dispatch tier, skills
+version, wall time, tokens and compactions measured from the harness's own session store (Claude Code, Codex,
+Devin CLI and Desktop; any other harness records `not-measured`), and how verification ended. `drive-build.sh`
+adds the dispatcher's view for any harness: `--harness claude|codex|devin|cursor|gemini|goose` (with `--model` and
+`--effort` mapped to each CLI's flags) runs the CLI in its structured mode where it has one (`claude
+--output-format stream-json`, `codex exec --json`, `devin --export <atif>`, `cursor-agent --output-format
+stream-json`, `gemini --output-format json`), measures the session that output names — or, for an `--agent-cmd`,
+the session found in the harness's store by worktree and time window — and appends one line (harness, sessions,
+wall time, exit code, tokens, compactions, cost and turns where reported) to the gitignored
+`<memoryRoot>/logs/drive-build/usage.jsonl`, joined to the trace by `dispatch_run`. Each unit runs with stdin
+closed, without the parent session's harness variables, and with `BUILD_TRACE_DISPATCH=headless` and
+`BUILD_TRACE_RUN=<run id>/iter-NNN`; `--usage-cmd` plugs in a harness with no adapter, `--no-usage` turns it off.
+These records are what a later evaluation reads — `audit-build mode=evaluate` strata, cost per ticket,
+replaying tickets at their base commit under another configuration — instead of mining transcripts that the
+harness may already have deleted.
 
 **A memory root in a monorepo subproject (BM-ROOT-03).** `drive-build.sh` reads it from the ledger's position
 (`--ledger <toplevel>/<sub>/docs/build/LEDGER.md`), exports `BUILD_MEMORY_ROOT=<sub>/docs/build` to every unit and

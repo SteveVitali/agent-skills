@@ -497,8 +497,8 @@ in **one** closeout commit:
    - Red **inherited from the base** (the same check is red on the base PR's head:
      `ci-boundary.sh --pr <base PR> --no-wait`) → append a PHASE LOG `blocked` entry, set
      `blockedOn: CI fail on #<n> (<check>)`, do not advance `nextTicket`, and report **blocked** — the closeout
-     commit then carries only that entry, `blockedOn` and the run ledger (no BUILD_INDEX row, no advance). Never
-     fix it silently here and never relax a test.
+     commit then carries only that entry, `blockedOn`, the run ledger and its trace line (step 3, `--outcome
+     blocked`; no BUILD_INDEX row, no advance). Never fix it silently here and never relax a test.
    - Pending after the wait, or unreadable → record `ci: pending …` / `ci: unknown …` with the script's detail
      (never "green"); the orchestrator's next boundary read decides. Local results alone are `locally-green`.
 1. **`BUILD_INDEX.md` row** — append one row for this ticket:
@@ -517,7 +517,19 @@ in **one** closeout commit:
    word> · harness: …`. A pending gate is a `RETURN PASS` row, **not** a `blockedOn`. Protected records only gain
    lines — GATE DECISIONS, PHASE LOG, DEFERRALS rows, readouts, BUILD_INDEX rows, executed contracts, ADR bodies
    and `*.jsonl`; a correction is a new dated entry naming the sha and line it corrects.
-3. **Validate** — set the run ledger's `Closed:` from `date -u`, stage the closeout (step 4's `git add`), then
+3. **Trace, then validate** — set the run ledger's `Closed:` from `date -u`, then append this attempt's trace
+   line to `<memoryRoot>/runs/<ID>.trace.jsonl` (BM-TRACE-01) with a shell call **in this session** (it finds
+   its own call in the transcript to know which agent it is, so never delegate it to a sub-agent):
+   ```bash
+   python3 -I <skills>/build-memory/scripts/build-trace.py record --ticket <ID> \
+     --outcome <done|blocked|gate-pending> --pr <n> --base-sha <the base commit from 0.2> --ci "<the ci: line>" \
+     --live <live verification> --layer <BM-STATUS-01 word> --ac met=<n>,met-engineered=<n>,partial=<n>,missed=<n>
+   ```
+   It reads `Started:`, `Harness:` and `Spec:` from the run ledger's header and the branch, head and diff from git,
+   names the harness by the nearest harness process above it (not by inherited variables), and measures this run's
+   tokens, peak context and compactions from that harness's own session store — Claude Code transcripts, Codex
+   rollouts, the Devin CLI/Desktop session database; elsewhere it records `usage: not-measured` with the reason. Never type usage figures in — pass `--usage-json <file>` only for a figure another tool measured.
+   Then stage the closeout (step 4's `git add`), then
    `bash skills/build-memory/scripts/check-build-memory.sh .` and `check-build-memory.sh . --staged` (history mode,
    BM-HIST-01: the staged lines only append, at the regions' ends, with dates from the clock; in a monorepo
    subproject both run with `BUILD_MEMORY_ROOT` set, from the worktree toplevel) must both exit 0 —
@@ -526,7 +538,7 @@ in **one** closeout commit:
 4. **Commit + push** the closeout as a **second, separate** commit:
    ```bash
    M="$(bash skills/build-memory/scripts/memory-root.sh | sed -n 's/^root=//p')"   # <memoryRoot>; docs/build by default
-   git add "$M/LEDGER.md" "$M/BUILD_INDEX.md" "$M/runs/<ID>.md"   # = docs/build/… in a single-repo layout
+   git add "$M/LEDGER.md" "$M/BUILD_INDEX.md" "$M/runs/<ID>.md" "$M/runs/<ID>.trace.jsonl"   # = docs/build/… in a single-repo layout
    git commit -m "docs(build): close <ID>"
    git push
    ```
