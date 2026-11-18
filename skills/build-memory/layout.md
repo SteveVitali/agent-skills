@@ -37,6 +37,7 @@ text in this file (0.5.0 applied the last of the SK-01…SK-25 proposals); the h
 │       ├── LEDGER.md                 # the machine-state file (§ LEDGER)
 │       ├── BUILD_INDEX.md            # one row per landed ticket (§ Build index)
 │       ├── runs/<ID>.md              # implement-spec run ledgers
+│       ├── runs/<ID>.trace.jsonl     # one build-trace/1 line per worker attempt (BM-TRACE-01)
 │       ├── pr/<ID>.md                # PR bodies as submitted
 │       ├── readouts/                 # GATE-G<k>.md · GATE-ACCEPT.md · HUMAN-H<k>.md (append-only; templates/READOUT.md)
 │       ├── planning/                 # re-planning rounds: <date -u +%F>_planning-ledger.md, <date -u +%F>_decision-memo.md
@@ -456,6 +457,29 @@ Signing never edits or deletes anything above it; the recorder names its harness
 not sign (BM-INDEX-03). The validator fails a readout created after the guards marker that lacks
 the guard sentence; older readouts only warn.
 
+**Trace records (BM-TRACE-01).** `docs/build/runs/<ID>.trace.jsonl` holds one JSON object per line, one line
+per worker attempt (a blocked attempt and its re-run are two lines), appended by the worker in its closeout
+commit with `scripts/build-trace.py record` (implement-spec §6.5 step 3). It is the run ledger header in
+machine-readable form, kept so that a later evaluation — cost per ticket, `audit-build mode=evaluate` strata,
+replaying a ticket at its base commit under another harness, model or effort — reads it directly rather than
+mining harness transcripts, which harnesses delete. Schema `build-trace/1`, in this key order:
+`schema`, `recorded_at` (`date -u`), `ticket`, `attempt`, `outcome` (`done | blocked | gate-pending |
+abandoned`), `repo` (`owner/name`, never a credential), `branch`, `base {sha, source, recorded}`, `head_sha` (the
+code head the PR's CI read), `diff {files, insertions, deletions}`, `pr`, `spec {path, blob_at_base}`, `harness
+{label, name, version, detected_from}` (`label` is the BM-HARNESS-01 string), `model`, `effort`,
+`effort_source`, `dispatch` (`headless | subagent | manual | unknown`), `session {id, agent_id?}`, `skills {sha,
+version, release?, dirty?}`, `started_at`, `closed_at`, `wall_s`, `usage`, `verification {ci, ci_status, live,
+layer, ac {met, met_engineered, partial, missed}}`, `dispatch_run` (joins `logs/drive-build/usage.jsonl`),
+`recorded_by`. `usage` is measured, never typed in: `{source: claude-code-transcript | codex-rollout,
+scope: session | agent-tree | branch | thread-tree, transcripts, model_calls, input_tokens (every prompt token:
+uncached + cache read + cache write), uncached_input_tokens, cache_read_tokens, cache_write_tokens,
+output_tokens, reasoning_tokens, peak_context_tokens, compactions, by_model}`, or `{source: supplied, …}` for a
+figure another tool measured, or `{source: not-measured, reason}`. Unknown values are `null`, never guessed. The
+file is a protected `*.jsonl` record (BM-HIST-01: byte prefix). The validator fails a line that is not a
+`build-trace/1` object naming the file's ticket, an `outcome`, a `dispatch`, an ISO `recorded_at` and a `usage`
+object, and — under the guards marker — warns for a Closed: run ledger created after the marker with no trace
+file. A harness that exposes no transcript still writes the line (`usage.source: not-measured`).
+
 ---
 
 ## Gate protocol (§7, BM-GATE-01..04)
@@ -676,7 +700,7 @@ lines a change adds or removes**, so legacy records never fail for what they alr
 | manifest `## Spec amendments applied`, `## Plan extensions`; chain table | append-only; a new chain row sits under a numbered `### Round <n>` banner (V13) and never re-binds an id to another slug |
 | executed contracts (the ticket has a BUILD_INDEX row at the base) | frozen; only an appended `> Amended <date -u +%F>:` note |
 | landed ADRs | frozen; only an appended `Superseded by ADR-NNN (<date -u +%F>)` line, ADR-NNN existing |
-| `docs/build/**/*.jsonl` | byte prefix |
+| `docs/build/**/*.jsonl` (incl. `runs/<ID>.trace.jsonl`, BM-TRACE-01) | byte prefix |
 | `reports/digests/*.md` | append-only |
 
 **Record dates** on added lines (PHASE LOG lead dates, GATE DECISIONS dates, `updatedAt`,
@@ -716,7 +740,7 @@ added line takes the committer time of the commit in the range that added it.
 | Artifact | Writer | When |
 |---|---|---|
 | `docs/build/README.md`, `LEDGER.md` (seed), `BUILD_INDEX.md` (header), `logs/.gitignore`, `docs/README.md` rows, `docs/adr/{README,_TEMPLATE}.md`, `docs/tickets/{00_MANIFEST,_TEMPLATE,DEFERRALS}.md`, tickets, markers, tail rows, `docs/decomposition-prompt.md` | `decompose-spec` via `build-memory init` | seed / extend |
-| `runs/<ID>.md`, `pr/<ID>.md`, ADRs, `DEFERRALS.md` rows, `BUILD_INDEX.md` row, `LEDGER.md` close (CURRENT STATE + PHASE LOG), `reports/*`, project registers the spec mandates | `implement-spec` | per ticket, two commits: code+docs, then `docs(build): close <ID>` |
+| `runs/<ID>.md`, `runs/<ID>.trace.jsonl` (via `scripts/build-trace.py record`), `pr/<ID>.md`, ADRs, `DEFERRALS.md` rows, `BUILD_INDEX.md` row, `LEDGER.md` close (CURRENT STATE + PHASE LOG), `reports/*`, project registers the spec mandates | `implement-spec` | per ticket, two commits: code+docs, then `docs(build): close <ID>` |
 | `LEDGER.md` GATE DECISIONS / RETURN PASS / OPEN FINDINGS / pause / insert / split; `readouts/*.md` (never the Signature: the operator's words only) | `orchestrate-build` | at boundaries, committed on the chain tip |
 | `reports/ledger-archive/*` + pointer comment | whoever replaces living `LEDGER.md` text | same commit |
 | `COVERAGE_MATRIX.csv`, `CAPSTONE_*.md`, `COMPOSED_E2E_REPORT.md` | `CAP.*` tickets (workers) | tail |
@@ -745,8 +769,11 @@ and `req_id_pattern` resolve, size + secrets.
   parses only after stripping markup, in the current region. Files created after the marker
   must also carry: the readout guard sentence (BM-INDEX-03), a run ledger's `Harness:` line
   (BM-HARNESS-01), parseable ADR index cells (BM-ADR-02).
+- **Always:** every line of a `runs/<ID>.trace.jsonl` is a `build-trace/1` object naming the file's ticket,
+  an `outcome`, a `dispatch`, an ISO `recorded_at` and a `usage` object (BM-TRACE-01).
 - **Warnings only:** BUILD_INDEX row shape, unique seq, `PR pending` once Closed:, the
-  live-verification vocabulary (BM-INDEX-01); record dates later than the clock (BM-CLOCK-01);
+  live-verification vocabulary (BM-INDEX-01); under the guards marker, a Closed: run ledger created after it with
+  no trace file (BM-TRACE-01); record dates later than the clock (BM-CLOCK-01);
   `nextTicket` not the lowest chain row still to land (gate-cell tokens and HUMAN rows skipped;
   a legacy bare gate-cell word warns); two `repair — close:` entries in a round
   with `blockedOn` empty; the orient recipe over 48 KiB; chain rows outside a numbered round

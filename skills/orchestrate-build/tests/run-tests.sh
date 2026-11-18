@@ -533,7 +533,62 @@ test_external_state() {
 
 say "orchestrate-build self-test"
 test_ci_boundary
+# ── drive-build.sh usage capture (BM-TRACE-01) ──────────────────────────────────
+# An auto-discovered `claude` (a stub first on PATH) runs with --output-format stream-json --verbose; each unit's
+# stream lands in iter-NNN-<id>.jsonl, its result text is printed, a build-dispatch/1 line per unit goes to
+# usage.jsonl, and every unit sees BUILD_TRACE_DISPATCH / BUILD_TRACE_RUN. --no-usage restores the text mode.
+test_usage_stream() {
+  local W CB L ok_before=$FAIL
+  if ! command -v python3 >/dev/null 2>&1; then say "SKIP drive-build-usage (no python3)"; return 0; fi
+  CB="$(mktemp -d)"
+  cat > "$CB/claude" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\$STUB_LEDGER.claude-argv"
+printf '%s %s\n' "\${BUILD_TRACE_DISPATCH:-}" "\${BUILD_TRACE_RUN:-}" >> "\$STUB_LEDGER.claude-env"
+next="\$(grep -m1 -E '^nextTicket:' "\$STUB_LEDGER" | awk '{print \$2}')"
+bash "$HERE/stub-agent.sh" "\$@" || exit 1
+echo "stub diagnostics" >&2
+case " \$* " in
+  *" stream-json "*)
+    printf '{"type":"system","subtype":"init","session_id":"s-%s","model":"claude-stub"}\n' "\$next"
+    printf '{"type":"result","subtype":"success","is_error":false,"num_turns":3,"duration_ms":1000,"total_cost_usd":0.5,"result":"closed %s","session_id":"s-%s","usage":{"input_tokens":1,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"output_tokens":4}}\n' "\$next" "\$next" ;;
+  *) echo "closed \$next" ;;
+esac
+STUB
+  chmod +x "$CB/claude"
+  W="$(mkrepo)"; green_stack; L="$W/docs/build/logs/drive-build"
+  OUT="$(STUB_LEDGER="$W/docs/build/LEDGER.md" PATH="$CB:$STUBPATH" bash "$DRIVE" --ledger "$W/docs/build/LEDGER.md" \
+         --worktree "$W" --ci-interval 1 --ci-max-wait 0 --max-iters 6 --yolo 2>&1)"; RC=$?
+  [ "$RC" -eq 0 ] || { fail "drive-build usage: exit=$RC (want 0)"; printf '%s\n' "$OUT" | tail -5 | sed 's/^/      /'; }
+  grep -qF -- '-p --permission-mode bypassPermissions --output-format stream-json --verbose' "$W/docs/build/LEDGER.md.claude-argv" \
+    || fail "drive-build usage: claude was not run with --output-format stream-json --verbose"
+  [ "$(grep -c '"schema":"build-dispatch/1"' "$L/usage.jsonl" 2>/dev/null)" = 2 ] || fail "drive-build usage: usage.jsonl does not hold one line per unit"
+  for kw in '"ticket":"T1","iter":1' '"ticket":"T2","iter":2' '"session_id":"s-T1"' '"total_cost_usd":0.5' \
+            '"usage":{"input_tokens":6,"uncached_input_tokens":1,"cache_read_tokens":2,"cache_write_tokens":3,"output_tokens":4}'; do
+    grep -qF -- "$kw" "$L/usage.jsonl" 2>/dev/null || fail "drive-build usage: usage.jsonl lacks $kw"
+  done
+  { [ -s "$L/iter-001-T1.jsonl" ] && grep -q '"type":"result"' "$L/iter-001-T1.jsonl"; } || fail "drive-build usage: no raw stream at iter-001-T1.jsonl"
+  grep -qF 'stub diagnostics' "$L/iter-001-T1.log" 2>/dev/null || fail "drive-build usage: stderr not kept in iter-001-T1.log"
+  for kw in 'closed T1' 'drive-build: usage T1: cost_usd=0.5 turns=3'; do
+    printf '%s' "$OUT" | grep -qF -- "$kw" || fail "drive-build usage: output lacks '$kw'"
+  done
+  grep -qE '^headless [0-9]{8}T[0-9]{6}Z-[0-9]+/iter-001$' "$W/docs/build/LEDGER.md.claude-env" \
+    || fail "drive-build usage: unit 1 did not see BUILD_TRACE_DISPATCH=headless BUILD_TRACE_RUN=<run>/iter-001"
+  grep -qF 'build-trace.py record; BM-TRACE-01' "$W/docs/build/LEDGER.md.prompt" 2>/dev/null \
+    || fail "drive-build usage: the prompt does not name the trace record"
+
+  W="$(mkrepo)"; green_stack; L="$W/docs/build/logs/drive-build"
+  OUT="$(STUB_LEDGER="$W/docs/build/LEDGER.md" PATH="$CB:$STUBPATH" bash "$DRIVE" --ledger "$W/docs/build/LEDGER.md" \
+         --worktree "$W" --ci-interval 1 --ci-max-wait 0 --max-iters 6 --yolo --no-usage 2>&1)"; RC=$?
+  [ "$RC" -eq 0 ] || fail "drive-build usage --no-usage: exit=$RC (want 0)"
+  grep -qF 'stream-json' "$W/docs/build/LEDGER.md.claude-argv" && fail "drive-build usage --no-usage: still ran stream-json"
+  [ -f "$L/usage.jsonl" ] && fail "drive-build usage --no-usage: wrote usage.jsonl"
+  printf '%s' "$OUT" | grep -qF 'closed T1' || fail "drive-build usage --no-usage: text output not shown"
+  [ "$FAIL" -eq "$ok_before" ] && say "PASS drive-build-usage"
+}
+
 test_drive_build
+test_usage_stream
 test_digest
 test_monorepo
 test_external_state

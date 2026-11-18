@@ -3,6 +3,92 @@
 All notable changes to agent-skills are recorded here. Versioning is the plugin version in
 `.claude-plugin/plugin.json`.
 
+## 0.7.0: a machine-readable trace line per ticket attempt (BM-TRACE-01); `drive-build.sh` captures `claude -p` usage
+
+A minor release that adds one committed record and one dispatcher log. The point is to evaluate the build skills
+across harness, model, effort and dispatch configurations from records the build already keeps, instead of mining
+harness transcripts. Harnesses delete those transcripts: Claude Code's default retention is 30 days. **Backward-compatible:** a repo without trace
+files validates exactly as before. A trace file is checked only where one exists, and the missing-trace warning
+fires only under the guards marker, for Closed: run ledgers created after the marker.
+
+### New: `build-memory/scripts/build-trace.py` (python3 stdlib)
+- **`record`** appends one `build-trace/1` JSON line per worker attempt to `<memoryRoot>/runs/<ID>.trace.jsonl`.
+  A blocked attempt and its re-run are two lines. Each line records:
+  - the ticket, attempt and outcome;
+  - `repo` (credentials stripped);
+  - the branch, the base commit (from a flag, a merge-base or the run ledger's `Base:`), the head commit and the
+    diff size;
+  - the PR, plus the contract's path and its git blob at the base commit;
+  - the harness (the BM-HARNESS-01 label plus what was detected), model, effort and its source, and the dispatch
+    tier;
+  - the session id and the skills sha/version;
+  - start, close and wall time;
+  - CI, live layer, BM-STATUS-01 layer and AC tallies.
+
+  **Usage is measured, never typed in.** The script reads it from the harness's own transcript:
+  - **Claude Code** (`CLAUDE_CODE_SESSION_ID`): the script finds its own call in the session's transcripts,
+    polling while the harness writes it. A subagent worker counts that agent and its descendants (`meta.json`
+    `parentAgentId`). A headless worker counts the whole session. Otherwise it counts the branch's lines.
+    Messages are deduplicated by id, and effort comes from `CLAUDE_EFFORT`.
+  - **Codex** (`CODEX_THREAD_ID`): the thread plus the threads it spawned, with model and effort from
+    `turn_context`.
+  - **Elsewhere:** `usage.source: not-measured` with the reason, or `--usage-json` for a figure another tool
+    measured.
+
+  Totals use one `input_tokens` definition for both providers (uncached + cache read + cache write), alongside the
+  cache split, output, reasoning, peak context, compactions and a per-model breakdown.
+- **`stream-usage` / `stream-result`** read a `claude -p --output-format stream-json` capture.
+
+### implement-spec
+- §6.5 step 3 (now "Trace, then validate") appends the trace line after CI is read and before the closeout commit.
+  It is a shell call in the worker's own session, never delegated. The blocked close carries it too
+  (`--outcome blocked`), and step 4's `git add` names it.
+
+### orchestrate-build
+- §2.3 confirms the trace line. A missing one is named in the repair entry and never written on the worker's
+  behalf.
+- The Dispatch section describes the trace and the usage log.
+- `drive-build.sh`:
+  - runs an auto-discovered `claude` with `--output-format stream-json --verbose`;
+  - keeps the raw stream in `iter-NNN-<unit>.jsonl` and stderr in `.log`;
+  - prints the result text as before;
+  - appends one `build-dispatch/1` line per unit (session id, cost, turns, duration, tokens) to the gitignored
+    `logs/drive-build/usage.jsonl`;
+  - exports `BUILD_TRACE_DISPATCH=headless` and `BUILD_TRACE_RUN=<run id>/iter-NNN` to every unit, so the trace
+    joins the usage line;
+  - names the trace record in the prompt.
+
+  `--no-usage` keeps the old text mode, and an `--agent-cmd` whose output holds a stream-json result is
+  summarized the same way.
+
+### build-memory
+- `layout.md` defines BM-TRACE-01: the tree entry, the schema and key order, the usage sources and scopes, the
+  history rule (a `*.jsonl` byte prefix), the writer row and the validator rows.
+- `check-build-memory.sh` fails a trace line that is not a `build-trace/1` object naming the file's ticket, an
+  `outcome`, a `dispatch`, an ISO `recorded_at` and a `usage` object. Under the guards marker it warns for a
+  Closed: run ledger created after the marker that has no trace file.
+- The `build-README` template lists the trace file.
+
+### Tests
+- `skills/build-memory/tests/run-tests.sh` `test_trace` builds synthetic Claude Code and Codex transcripts with
+  known totals and runs under `env -i`. It covers:
+  - agent-tree scoping (a sibling subagent and the orchestrator's other-branch line excluded; a duplicated
+    message id counted once; a compaction counted);
+  - a Codex thread tree (an unrelated thread excluded);
+  - the run-ledger fallback (effort from the `-high` suffix, `not-measured` usage);
+  - that the second attempt only appends;
+  - four malformed lines the validator must flag;
+  - usage-error and scratch-mode exits;
+  - both stream modes.
+
+  Mutating the dedupe or the agent-tree walk fails it.
+- `skills/orchestrate-build/tests/run-tests.sh` `test_usage_stream` puts a stub `claude` first on `PATH` and
+  checks the stream flags, `usage.jsonl` (one line per unit), the raw stream and stderr logs, the printed result
+  and summary, the `BUILD_TRACE_*` environment, the prompt sentence, and that `--no-usage` restores text mode.
+- `tests/lint-skills.sh` asserts the §6.5 command, the measured-usage rule, the no-trace-on-the-worker's-behalf
+  rule and the layout definition.
+- `.claude-plugin/marketplace.json` was still at 0.5.4 after 0.6.0; both manifests now read 0.7.0.
+
 ## 0.6.0: new skill `audit-build`, an independent re-review of landed tickets with a measurement mode
 
 A minor release that adds one skill and one optional build-memory record. **Backward-compatible:** nothing

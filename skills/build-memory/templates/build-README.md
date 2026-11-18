@@ -13,7 +13,8 @@ this directory does not restate it.
 
 - `LEDGER.md` — the machine-state file (`orchestrate-build` and `drive-build.sh` parse it).
 - `BUILD_INDEX.md` — one row per landed chain row.
-- `runs/<ID>.md` — the `implement-spec` run ledger for each ticket · `pr/<ID>.md` — its PR body.
+- `runs/<ID>.md` — the `implement-spec` run ledger for each ticket · `runs/<ID>.trace.jsonl` — one machine-readable
+  trace line per attempt (harness, model, effort, tokens, base/head commit; BM-TRACE-01) · `pr/<ID>.md` — its PR body.
 - `readouts/GATE-G<k>.md` — gate readouts (append-only) · `planning/` — re-planning rounds.
 - `tools/`, `fixtures/`, `reports/` — committed · `logs/` — the one gitignored subtree.
 

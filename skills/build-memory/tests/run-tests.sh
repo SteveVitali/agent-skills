@@ -737,6 +737,150 @@ test_monorepo() {
   [ "$ok" = 1 ] && say "PASS monorepo"
 }
 
+# ── BM-TRACE-01: build-trace.py record / stream modes + the validator's trace check ───────────────
+# Synthetic Claude Code and Codex transcripts with known totals; env -i so the test session's own harness
+# variables never leak into what is measured.
+test_trace() {
+  local ok=1 W C X S out rc base line
+  if ! command -v python3 >/dev/null 2>&1; then say "SKIP trace (no python3)"; return 0; fi
+  local TP="$SCRIPTS/build-trace.py"
+  W="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$W"; gitify "$W"
+  base="$(git -C "$W" rev-parse HEAD)"
+  ( cd "$W" && git checkout -q -b demo/t9 && printf 'x\n' > feature.txt && git add feature.txt \
+      && git -c user.email=t@t -c user.name=t commit -qm feature ) >/dev/null 2>&1
+  # Claude Code: main session (orchestrator, other branch) + worker subagent aW (holds the record call) + its
+  # reviewer aR (parentAgentId aW) + an unrelated sibling aX that must not be counted.
+  C="$(tmp)"; S="$C/projects/-tmp-demo/sess-1"; mkdir -p "$S/subagents"
+  cat > "$C/projects/-tmp-demo/sess-1.jsonl" <<'EOF'
+{"type":"assistant","gitBranch":"demo/base","timestamp":"2026-11-01T09:00:00Z","message":{"id":"m0","model":"claude-opus-5-5","usage":{"input_tokens":10,"cache_read_input_tokens":100,"cache_creation_input_tokens":0,"output_tokens":5}}}
+EOF
+  cat > "$S/subagents/agent-aW.jsonl" <<'EOF'
+{"type":"assistant","gitBranch":"demo/t9","timestamp":"2026-11-01T10:00:00Z","message":{"id":"m1","model":"claude-opus-5-5","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":2,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200,"output_tokens":50,"output_tokens_details":{"thinking_tokens":7}}}}
+{"type":"assistant","gitBranch":"demo/t9","timestamp":"2026-11-01T10:00:01Z","message":{"id":"m1","model":"claude-opus-5-5","content":[{"type":"text","text":"same message, second block"}],"usage":{"input_tokens":2,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200,"output_tokens":50,"output_tokens_details":{"thinking_tokens":7}}}}
+{"type":"system","subtype":"compact_boundary","gitBranch":"demo/t9","timestamp":"2026-11-01T10:05:00Z"}
+{"type":"assistant","gitBranch":"demo/t9","timestamp":"2026-11-01T10:10:00Z","message":{"id":"m2","model":"claude-opus-5-5","content":[{"type":"tool_use","name":"Bash","input":{"command":"python3 -I /x/build-memory/scripts/build-trace.py record --ticket T1 --outcome done"}}],"usage":{"input_tokens":3,"cache_read_input_tokens":2000,"cache_creation_input_tokens":300,"output_tokens":60}}}
+EOF
+  printf '{"agentType":"general-purpose"}\n' > "$S/subagents/agent-aW.meta.json"
+  cat > "$S/subagents/agent-aR.jsonl" <<'EOF'
+{"type":"assistant","gitBranch":"demo/t9","timestamp":"2026-11-01T10:07:00Z","message":{"id":"m3","model":"claude-haiku-5-5","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":500,"output_tokens":20}}}
+EOF
+  printf '{"parentAgentId":"aW"}\n' > "$S/subagents/agent-aR.meta.json"
+  cat > "$S/subagents/agent-aX.jsonl" <<'EOF'
+{"type":"assistant","gitBranch":"demo/t9","timestamp":"2026-11-01T10:08:00Z","message":{"id":"m4","model":"claude-opus-5-5","usage":{"input_tokens":9999,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":9999}}}
+EOF
+  printf '{"parentAgentId":null}\n' > "$S/subagents/agent-aX.meta.json"
+  line="$(cd "$W" && env -i PATH="$PATH" HOME="$C" CLAUDE_CONFIG_DIR="$C" CLAUDE_CODE_SESSION_ID=sess-1 CLAUDE_EFFORT=high \
+    python3 -I "$TP" record --ticket T1 --outcome done --pr 7 --base-sha "$base" --ci 'ci: pass #7@abc1234 (web 1)' \
+    --live n-a --layer engineered --ac met=3,met-engineered=1,partial=0,missed=0 --started 2026-11-01T09:30:00Z \
+    --now 2026-11-01T10:30:00Z 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || { fail "trace: claude record exited $rc"; ok=0; }
+  out="$W/docs/build/runs/T1.trace.jsonl"
+  [ "$(grep -c . "$out" 2>/dev/null)" = 1 ] || { fail "trace: claude record did not append exactly one line to runs/T1.trace.jsonl"; ok=0; }
+  for kw in '"schema":"build-trace/1"' '"recorded_at":"2026-11-01T10:30:00Z"' '"ticket":"T1"' '"attempt":1' '"outcome":"done"' \
+            '"branch":"demo/t9"' "\"base\":{\"sha\":\"$base\",\"source\":\"flag\"" '"diff":{"files":1,"insertions":1,"deletions":0}' \
+            '"pr":7' '"name":"claude-code"' '"detected_from":"CLAUDE_CODE_SESSION_ID"' '"model":"claude-opus-5-5"' \
+            '"effort":"high","effort_source":"CLAUDE_EFFORT"' '"session":{"id":"sess-1","agent_id":"aW"}' '"wall_s":3600' \
+            '"source":"claude-code-transcript","scope":"agent-tree","transcripts":2,"model_calls":3' \
+            '"input_tokens":4006,"uncached_input_tokens":6,"cache_read_tokens":3000,"cache_write_tokens":1000' \
+            '"output_tokens":130,"reasoning_tokens":7,"peak_context_tokens":2303,"compactions":1' \
+            '"claude-haiku-5-5":{"model_calls":1,"input_tokens":501' '"ci_status":"pass"' \
+            '"ac":{"met":3,"met_engineered":1,"partial":0,"missed":0}' '"dispatch":"unknown"'; do
+    printf '%s' "$line" | grep -qF -- "$kw" || { fail "trace: claude record lacks $kw"; ok=0; }
+  done
+  bash "$SCRIPTS/check-build-memory.sh" "$W" >/dev/null 2>&1 || { fail "trace: a valid trace file failed the validator"; ok=0; }
+
+  # Codex: root thread th1 + child th2 (parent_thread_id) counted; unrelated th3 not. Attempt 2 only appends.
+  X="$(tmp)"; mkdir -p "$X/sessions/2026/11/01"
+  cat > "$X/sessions/2026/11/01/rollout-2026-11-01T10-00-00-th1.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"id":"th1"}}
+{"type":"turn_context","payload":{"model":"gpt-x","effort":"xhigh"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":800,"cache_write_input_tokens":0,"output_tokens":50,"reasoning_output_tokens":10},"last_token_usage":{"input_tokens":1000}}}}
+{"type":"compacted","payload":{}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":3000,"cached_input_tokens":2500,"cache_write_input_tokens":0,"output_tokens":120,"reasoning_output_tokens":30},"last_token_usage":{"input_tokens":2000}}}}
+EOF
+  cat > "$X/sessions/2026/11/01/rollout-2026-11-01T10-05-00-th2.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"id":"th2","parent_thread_id":"th1"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":500,"cached_input_tokens":100,"output_tokens":20,"reasoning_output_tokens":5},"last_token_usage":{"input_tokens":500}}}}
+EOF
+  cat > "$X/sessions/2026/11/01/rollout-2026-11-01T10-06-00-th3.jsonl" <<'EOF'
+{"type":"session_meta","payload":{"id":"th3"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":77777,"cached_input_tokens":0,"output_tokens":7},"last_token_usage":{"input_tokens":77777}}}}
+EOF
+  local first; first="$(cat "$out")"
+  line="$(cd "$W" && env -i PATH="$PATH" HOME="$X" CODEX_HOME="$X" CODEX_THREAD_ID=th1 BUILD_TRACE_DISPATCH=headless \
+    BUILD_TRACE_RUN=r1/iter-002 python3 -I "$TP" record --ticket T1 --outcome blocked --now 2026-11-01T11:00:00Z 2>/dev/null)"
+  [ "$(grep -c . "$out")" = 2 ] || { fail "trace: codex record did not append a second line"; ok=0; }
+  [ "$(head -n 1 "$out")" = "$first" ] || { fail "trace: the second record rewrote the first line (byte prefix)"; ok=0; }
+  for kw in '"attempt":2' '"outcome":"blocked"' '"name":"codex"' '"model":"gpt-x"' '"effort":"xhigh","effort_source":"turn_context"' \
+            '"dispatch":"headless"' '"dispatch_run":"r1/iter-002"' '"source":"codex-rollout","scope":"thread-tree","transcripts":2,"model_calls":3' \
+            '"input_tokens":3500,"uncached_input_tokens":900,"cache_read_tokens":2600,"cache_write_tokens":0' \
+            '"output_tokens":140,"reasoning_tokens":35,"peak_context_tokens":2000,"compactions":1'; do
+    printf '%s' "$line" | grep -qF -- "$kw" || { fail "trace: codex record lacks $kw"; ok=0; }
+  done
+
+  # No transcript (e.g. a desktop agent): harness/model/tier from the run ledger's Harness: line, effort from the
+  # model-id suffix, base from its Base: line; usage not-measured, never invented.
+  printf '# T2 run ledger\n\n- **Harness:** devin-desktop/swe-2-high/subagent · **Base:** `main` @ `%s`\n- **Started:** 2026-11-01T08:00:00Z\n\n## Plan\n' \
+    "$(printf '%s' "$base" | cut -c1-8)" > "$W/docs/build/runs/T2.md"
+  line="$(cd "$W" && env -i PATH="$PATH" HOME="$X" python3 -I "$TP" record --ticket T2 --outcome done --dry-run \
+    --now 2026-11-01T09:00:00Z 2>/dev/null)"
+  for kw in '"label":"devin-desktop/swe-2-high/subagent","name":"devin-desktop"' '"model":"swe-2-high"' \
+            '"effort":"high","effort_source":"model-suffix"' '"dispatch":"subagent"' '"source":"run-ledger"' \
+            '"wall_s":3600' '"usage":{"source":"not-measured"'; do
+    printf '%s' "$line" | grep -qF -- "$kw" || { fail "trace: run-ledger fallback lacks $kw"; ok=0; }
+  done
+  [ -f "$W/docs/build/runs/T2.trace.jsonl" ] && { fail "trace: --dry-run wrote a file"; ok=0; }
+  rm -f "$W/docs/build/runs/T2.md"
+
+  # Validator: each malformed line is a trace violation naming the file and BM-TRACE-01.
+  local bad
+  for bad in 'not json' '{"schema":"build-trace/1","ticket":"T9","outcome":"done","dispatch":"manual","recorded_at":"2026-11-01T00:00:00Z","usage":{}}' \
+             '{"schema":"build-trace/1","ticket":"T1","outcome":"merged","dispatch":"manual","recorded_at":"2026-11-01T00:00:00Z","usage":{}}' \
+             '{"schema":"build-trace/1","ticket":"T1","outcome":"done","dispatch":"manual","recorded_at":"2026-11-01T00:00:00Z"}'; do
+    cp "$out" "$out.keep"; printf '%s\n' "$bad" >> "$out"
+    rc=0; o="$(bash "$SCRIPTS/check-build-memory.sh" "$W" 2>&1)" || rc=$?
+    { [ "$rc" -eq 1 ] && printf '%s' "$o" | grep -q 'runs/T1.trace.jsonl line 3: .*BM-TRACE-01'; } \
+      || { fail "trace: validator did not flag line 3 ($bad) (exit $rc)"; ok=0; }
+    mv "$out.keep" "$out"
+  done
+  bash "$SCRIPTS/check-build-memory.sh" "$W" >/dev/null 2>&1 || { fail "trace: restored trace file failed the validator"; ok=0; }
+
+  # Usage errors exit 1; scratch mode without --out exits 2.
+  rc=0; python3 -I "$TP" record --ticket 'a b' --outcome done >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] || { fail "trace: a malformed ticket id exited $rc (want 1)"; ok=0; }
+  local Z; Z="$(tmp)/plain"; mkdir -p "$Z"; git -C "$Z" init -q
+  rc=0; ( cd "$Z" && env -i PATH="$PATH" HOME="$Z" AGENT_SCRATCH_DIR="$Z/.s" python3 -I "$TP" record --ticket T1 --outcome done ) >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || { fail "trace: scratch mode without --out exited $rc (want 2)"; ok=0; }
+
+  # stream-usage / stream-result over a claude -p stream-json capture.
+  local SJ; SJ="$(tmp)/s.jsonl"
+  cat > "$SJ" <<'EOF'
+{"type":"system","subtype":"init","session_id":"s-9","model":"claude-opus-5-5"}
+{"type":"assistant","message":{"id":"x","content":[{"type":"text","text":"working"}]}}
+{"type":"result","subtype":"success","is_error":false,"num_turns":12,"duration_ms":61000,"duration_api_ms":50000,"total_cost_usd":1.25,"result":"T1 closed: PR #7","session_id":"s-9","usage":{"input_tokens":4,"cache_read_input_tokens":900,"cache_creation_input_tokens":100,"output_tokens":70},"modelUsage":{"claude-opus-5-5":{"inputTokens":4,"outputTokens":70,"costUSD":1.25}}}
+EOF
+  line="$(python3 -I "$TP" stream-usage "$SJ" --ticket T1 --iter 3 --run r1 --now 2026-11-01T12:00:00Z)"
+  for kw in '"schema":"build-dispatch/1"' '"ticket":"T1","iter":3,"run":"r1"' '"session_id":"s-9","model":"claude-opus-5-5","complete":true' \
+            '"num_turns":12' '"total_cost_usd":1.25' '"usage":{"input_tokens":1004,"uncached_input_tokens":4,"cache_read_tokens":900,"cache_write_tokens":100,"output_tokens":70}'; do
+    printf '%s' "$line" | grep -qF -- "$kw" || { fail "trace: stream-usage lacks $kw"; ok=0; }
+  done
+  [ "$(python3 -I "$TP" stream-result "$SJ")" = "T1 closed: PR #7" ] || { fail "trace: stream-result did not print the result text"; ok=0; }
+
+  # Guards marker: a Closed: run ledger created after the marker without a trace file warns (never fails); one
+  # created before the marker (v2-clean's T1, here without its trace) does not.
+  local G; G="$(tmp)/repo"; cp -R "$HERE/v2-clean" "$G"; gitify "$G"
+  printf '<!-- build-memory-guards: 1 -->\n' >> "$G/docs/build/README.md"
+  ( cd "$G" && git add -A && git -c user.email=t@t -c user.name=t commit -qm guards ) >/dev/null 2>&1
+  o="$(bash "$SCRIPTS/check-build-memory.sh" "$G" 2>&1)"
+  printf '%s' "$o" | grep -qF 'trace:' && { fail "trace: a run ledger older than the guards marker drew a trace warning"; ok=0; }
+  printf '# T3 — run ledger\n- **Harness:** claude-code/claude-opus-5-5/headless\n- **Closed:** 2026-11-01T10:00:00Z\n\n## Plan\n' > "$G/docs/build/runs/T3.md"
+  rc=0; o="$(bash "$SCRIPTS/check-build-memory.sh" "$G" --now 2026-11-02T00:00:00Z 2>&1)" || rc=$?
+  printf '%s' "$o" | grep -qF '~ trace: 1 closed run ledger(s) created after the guards marker have no runs/<ID>.trace.jsonl (first: T3.md)' \
+    || { fail "trace: a new Closed: run ledger without a trace did not warn"; printf '%s\n' "$o" | grep -i trace | sed 's/^/      /'; ok=0; }
+  printf '%s' "$o" | grep -qE '^ *- trace:' && { fail "trace: a missing trace file was a violation (want a warning)"; ok=0; }
+  [ "$ok" = 1 ] && say "PASS trace"
+}
+
 test_clean
 test_violations
 test_legacy
@@ -757,6 +901,7 @@ test_reqcov
 test_passed_gate_deferrals
 test_positional_status
 test_monorepo
+test_trace
 
 if [ "$FAIL" -eq 0 ]; then
   say "ALL PASS"

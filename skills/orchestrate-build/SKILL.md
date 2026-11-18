@@ -236,7 +236,8 @@ there is no orchestrator, which is exactly how a build ends with a ledger that n
 reports a pushed PR + evidence report, **confirm** rather than advance:
 1. The ledger's `CURRENT STATE` advanced (`lastCompleted` = this ticket, `nextTicket` = the next chain row,
    `chainTip` advanced for a chained ticket) and a fixed-shape `PHASE LOG` "done" entry was appended.
-2. `BUILD_INDEX.md` has this ticket's row and `docs/build/runs/<ID>.md` exists.
+2. `BUILD_INDEX.md` has this ticket's row, `docs/build/runs/<ID>.md` exists, and `runs/<ID>.trace.jsonl` gained
+   this attempt's line (BM-TRACE-01).
 3. `bash <skills>/build-memory/scripts/check-build-memory.sh .` exits 0, and so does its history mode over
    the ticket's commits, `check-build-memory.sh . --range <chainTip before the ticket>..<chainTip now>`
    (BM-HIST-01: protected records only gained lines, at their ends, with dates from the clock).
@@ -282,7 +283,9 @@ reports a pushed PR + evidence report, **confirm** rather than advance:
    `foreign-commits`. No author is accepted without the row, and there is no default author list.
 If any of 1–3 is missing (an older worker, a scratch-mode run, or an interruption), repair it as a PHASE LOG
 `repair` entry that names the gap (`repair — close: <which item> (<worker harness>, why)`), then re-run the
-validator. Never back-fill a `done` entry for work you did not verify. A second close repair in the same round
+validator. Never back-fill a `done` entry for work you did not verify, and never write a trace line on the
+worker's behalf: its harness, model and usage are the worker's to record, so a missing one is named in the
+repair entry and stays missing. A second close repair in the same round
 sets `blockedOn: worker close protocol broken (<ids>)`: fix the worker, not the symptom.
 **Never fabricate green.** If the worker blocked, self-review stayed red, CI is not green, or an agentic metric
 regressed: set `blockedOn`, record it, do NOT advance `nextTicket`, STOP. A pending gate is a `RETURN PASS` row,
@@ -388,6 +391,17 @@ non-interactive prompt mode, otherwise the `manual` tier. For `manual`, `drive-b
 exact fresh-session prompt for the next unit without dispatching anything: start **one new session** with it,
 let it run that unit and stop, then re-run `--print-prompt`. Never continue a finished unit's session into the
 next ticket.
+
+**Usage and the trace record (BM-TRACE-01).** Every worker appends one trace line per attempt at close
+(`implement-spec` §6.5 step 3): ticket, base and head commit, harness / model / effort / dispatch tier, skills
+version, wall time, tokens and compactions measured from the harness's own transcript, and how verification
+ended. `drive-build.sh` adds the dispatcher's view: each unit runs with `BUILD_TRACE_DISPATCH=headless` and
+`BUILD_TRACE_RUN=<run id>/iter-NNN`, and an auto-discovered `claude` runs with `--output-format stream-json
+--verbose`, so the whole process's cost, turns and duration land as one line in the gitignored
+`<memoryRoot>/logs/drive-build/usage.jsonl`, joined to the trace by `dispatch_run` (`--no-usage` keeps the text
+mode). These records are what a later evaluation reads — `audit-build mode=evaluate` strata, cost per ticket,
+replaying tickets at their base commit under another configuration — instead of mining transcripts that the
+harness may already have deleted.
 
 **A memory root in a monorepo subproject (BM-ROOT-03).** `drive-build.sh` reads it from the ledger's position
 (`--ledger <toplevel>/<sub>/docs/build/LEDGER.md`), exports `BUILD_MEMORY_ROOT=<sub>/docs/build` to every unit and

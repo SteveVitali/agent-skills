@@ -48,6 +48,16 @@
 #   --print-prompt  The manual tier (a harness with no headless CLI): run the same checks (status enum,
 #                 block, pause, CI gate), then print the fresh-session prompt for the next unit and exit
 #                 0 without dispatching. Paste it into a new session of any harness; re-run after the unit.
+#   --no-usage    Run an auto-discovered `claude` in its plain text mode. By default it runs with
+#                 `--output-format stream-json --verbose`: the raw stream goes to iter-NNN-<unit>.jsonl,
+#                 stderr to iter-NNN-<unit>.log, the final result text is printed as before, and one
+#                 build-dispatch/1 line (session id, cost, turns, duration, tokens) is appended to
+#                 <log-dir>/usage.jsonl (needs python3; build-memory/scripts/build-trace.py stream-usage).
+#                 An --agent-cmd whose output holds a stream-json result line is summarized the same way.
+#
+# Trace (BM-TRACE-01): every headless unit runs with BUILD_TRACE_DISPATCH=headless and
+# BUILD_TRACE_RUN=<run id>/iter-NNN in its environment (an operator-set value is kept), so the trace line
+# the worker appends at close names its dispatch tier and joins to this run's usage.jsonl line.
 #
 # Exit codes: 0 = DONE, cleanly paused, gate-pending, or (--print-prompt) prompt printed;
 #             2 = BLOCKED / off-enum projectStatus / CI not green / no-progress (human needed);
@@ -59,7 +69,7 @@
 set -euo pipefail
 
 LEDGER="" ; AGENT_CMD="" ; MAX_ITERS=100 ; WORKTREE="" ; LOG_DIR="" ; YOLO=0 ; SKILL_NAME="orchestrate-build"
-CI_GATE=auto ; CI_INTERVAL=60 ; CI_MAX_WAIT=2700 ; PRINT_PROMPT=0
+CI_GATE=auto ; CI_INTERVAL=60 ; CI_MAX_WAIT=2700 ; PRINT_PROMPT=0 ; USAGE=1 ; STREAM=0
 
 usage() { grep -E '^#( |$)' "$0" | sed -E 's/^# ?//'; }
 
@@ -77,6 +87,7 @@ while [ $# -gt 0 ]; do
     --ci-interval) CI_INTERVAL="${2:-}"; shift 2 ;;
     --ci-max-wait) CI_MAX_WAIT="${2:-}"; shift 2 ;;
     --print-prompt) PRINT_PROMPT=1; shift ;;
+    --no-usage)  USAGE=0; shift ;;
     -h|--help)   usage; exit 0 ;;
     *) echo "drive-build.sh: unknown arg: $1 (try --help)" >&2; exit 1 ;;
   esac
@@ -129,6 +140,7 @@ elif [ -n "$AGENT_CMD" ]; then
 elif command -v claude >/dev/null 2>&1; then
   BASE_ARGV=(claude -p) ; AUTONOMY_NOTE="--permission-mode bypassPermissions"
   [ "$YOLO" -eq 1 ] && BASE_ARGV+=(--permission-mode bypassPermissions)
+  if [ "$USAGE" -eq 1 ]; then BASE_ARGV+=(--output-format stream-json --verbose); STREAM=1; fi
 elif command -v goose >/dev/null 2>&1; then
   BASE_ARGV=(goose run --no-session -q) ; AUTONOMY_NOTE="GOOSE_MODE=auto"
   [ "$YOLO" -eq 1 ] && BASE_ARGV=(env GOOSE_MODE=auto "${BASE_ARGV[@]}")
@@ -183,6 +195,32 @@ LEDGER_HARNESS="$(status_val harness)"
 echo "drive-build: ledger=$LEDGER harness(ledger)=${LEDGER_HARNESS:-<not recorded>}"
 if [ -n "$MEM_REL" ]; then echo "drive-build: memory root=$MEM_REL (BUILD_MEMORY_ROOT, exported to every unit)"; fi
 echo "drive-build: agent=[${BASE_ARGV[*]}] yolo=$YOLO worktree=${WORKTREE:-<none>} logs=$LOG_DIR max-iters=$MAX_ITERS ci-gate=$CI_NOTE"
+
+# Dispatch usage (BM-TRACE-01): one build-dispatch/1 line per unit whose output is a claude stream-json capture,
+# appended to the gitignored <log-dir>/usage.jsonl. Never fatal: a missing python3 or an unparseable stream
+# leaves the raw capture in place and says so.
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+TRACE_DISPATCH_SET="${BUILD_TRACE_DISPATCH:-}" ; TRACE_RUN_SET="${BUILD_TRACE_RUN:-}"
+TRACE_PY="$SKILLS_ROOT/build-memory/scripts/build-trace.py"
+record_usage() {   # record_usage <unit> <iter>
+  local src="" line cost turns
+  if [ "$STREAM" -eq 1 ]; then src="$JLOG"
+  elif [ "$USAGE" -eq 1 ] && grep -q '"type"[[:space:]]*:[[:space:]]*"result"' "$LOG" 2>/dev/null; then src="$LOG"; fi
+  [ -n "$src" ] || return 0
+  if ! command -v python3 >/dev/null 2>&1 || [ ! -f "$TRACE_PY" ]; then
+    echo "drive-build: note: python3 or build-trace.py not found — usage not summarized; raw stream kept at $src" >&2
+    return 0
+  fi
+  [ "$STREAM" -eq 1 ] && python3 -I "$TRACE_PY" stream-result "$src" 2>/dev/null || true
+  if line="$(python3 -I "$TRACE_PY" stream-usage "$src" --ticket "$1" --iter "$2" --run "$RUN_ID" 2>/dev/null)" && [ -n "$line" ]; then
+    printf '%s\n' "$line" >> "$LOG_DIR/usage.jsonl"
+    cost="$(printf '%s' "$line" | sed -nE 's/.*"total_cost_usd":([0-9.eE+-]+).*/\1/p')"
+    turns="$(printf '%s' "$line" | sed -nE 's/.*"num_turns":([0-9]+).*/\1/p')"
+    echo "drive-build: usage $1: cost_usd=${cost:-?} turns=${turns:-?} → $LOG_DIR/usage.jsonl"
+  else
+    echo "drive-build: note: could not summarize usage from $src" >&2
+  fi
+}
 
 # CI gate (BM-CI-01): the loop itself refuses to dispatch past a red, pending or unreadable PR.
 # Runs whenever lastCompleted names a ticket not yet verified in this run — so a restart re-reads it.
@@ -249,7 +287,8 @@ run-ledger header. The ledger's CURRENT STATE \`harness:\` reads '${LEDGER_HARNE
 a different harness or model than yours, you are a harness switch (BM-HARNESS-01) — allowed only at this boundary \
 and only on the operator's words: record a PHASE LOG \`harness-switch\` entry quoting them, or stop and ask. \
 Before you stop on a block, a gate or a usage-limit event, or after the last row under a chain-table banner, \
-write the operator digest (orchestrate-build §4, scripts/digest.sh).$MEM_PROMPT"
+write the operator digest (orchestrate-build §4, scripts/digest.sh). A ticket's closeout appends its trace line \
+(implement-spec §6.5, build-memory/scripts/build-trace.py record; BM-TRACE-01).$MEM_PROMPT"
 
   if [ "$PRINT_PROMPT" -eq 1 ]; then
     echo "drive-build: checks passed — start ONE fresh session (any harness) with this prompt, then re-run --print-prompt:"
@@ -260,16 +299,27 @@ write the operator digest (orchestrate-build §4, scripts/digest.sh).$MEM_PROMPT
   fi
 
   ARGV=( "${BASE_ARGV[@]}" "$PROMPT" )
-  LOG="$LOG_DIR/iter-$(printf '%03d' "$i")-${NEXT}.log"
+  ITER="$(printf '%03d' "$i")"
+  LOG="$LOG_DIR/iter-${ITER}-${NEXT}.log" ; JLOG="$LOG_DIR/iter-${ITER}-${NEXT}.jsonl"
+  export BUILD_TRACE_DISPATCH="${TRACE_DISPATCH_SET:-headless}" BUILD_TRACE_RUN="${TRACE_RUN_SET:-$RUN_ID/iter-$ITER}"
 
   set +e
-  if [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ]; then
+  if [ "$STREAM" -eq 1 ]; then
+    # stream-json: stdout is the event stream (kept whole), stderr the diagnostics; the result text is printed after.
+    if [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ]; then ( cd "$WORKTREE" && "${ARGV[@]}" ) > "$JLOG" 2> "$LOG"
+    else "${ARGV[@]}" > "$JLOG" 2> "$LOG"; fi
+    rc=$?
+    [ -s "$LOG" ] && cat "$LOG" >&2
+  elif [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ]; then
     ( cd "$WORKTREE" && "${ARGV[@]}" ) 2>&1 | tee "$LOG"
+    rc=${PIPESTATUS[0]}
   else
     "${ARGV[@]}" 2>&1 | tee "$LOG"
+    rc=${PIPESTATUS[0]}
   fi
-  rc=${PIPESTATUS[0]}
   set -e
+  record_usage "$NEXT" "$i"
+  OUT_LOG="$LOG"; [ "$STREAM" -eq 1 ] && OUT_LOG="$JLOG"
 
   # Progress = the ledger moved. If it didn't, diagnose (don't spin).
   NEW_STATUS="$(status_val projectStatus | awk '{print $1}')" ; NEW_NEXT="$(status_val nextTicket)" ; NEW_BLOCKED="$(status_val blockedOn)"
@@ -286,13 +336,13 @@ write the operator digest (orchestrate-build §4, scripts/digest.sh).$MEM_PROMPT
         fi
         echo "drive-build: unit '$NEXT' made no ledger progress (agent exit=$rc)." >&2
         echo "  Most common cause: writes were denied because autonomy is off — re-run with --yolo." >&2
-        echo "  See the agent transcript: $LOG" >&2
+        echo "  See the agent transcript: $OUT_LOG" >&2
         exit 2 ;;
-      *) echo "drive-build: unit '$NEXT' set blockedOn='$NEW_BLOCKED' (agent exit=$rc) — human needed. See $LOG." >&2
+      *) echo "drive-build: unit '$NEXT' set blockedOn='$NEW_BLOCKED' (agent exit=$rc) — human needed. See $OUT_LOG." >&2
          exit 2 ;;
     esac
   fi
-  [ "$rc" -eq 0 ] || echo "drive-build: note: agent exited $rc but the ledger advanced; continuing. See $LOG." >&2
+  [ "$rc" -eq 0 ] || echo "drive-build: note: agent exited $rc but the ledger advanced; continuing. See $OUT_LOG." >&2
 done
 
 echo "drive-build: hit --max-iters=$MAX_ITERS without reaching DONE. Re-run to continue." >&2

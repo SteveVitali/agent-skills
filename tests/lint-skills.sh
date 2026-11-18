@@ -78,6 +78,11 @@ present 'A row leaves the `nextTicket` order only by a token in its **gate cell*
 present '`superseded-by-split` in its manifest gate cell' 'the split mark in the gate cell (0.5.1)' "$OB"
 retired '`superseded-by-split` in the chain table' 'a split mark with no gate cell — 0.5.1' "$LAY"
 present 'once its header carries a dated `Closed:` stamp' 'a run ledger closes by its header stamp (0.5.1)' "$LAY"
+# 0.7.0 — the per-ticket trace record (BM-TRACE-01); each fails against 0.6.0's text.
+present 'build-trace.py record --ticket <ID>' 'the trace record at close (BM-TRACE-01)' "$IS"
+present 'Never type usage figures in' 'measured usage only (BM-TRACE-01)' "$IS"
+present 'never write a trace line on the' 'no trace written on the worker'"'"'s behalf (BM-TRACE-01)' "$OB"
+present '**Trace records (BM-TRACE-01).**' 'the trace record contract (BM-TRACE-01)' "$LAY"
 present 'a `#` inside a token is kept' 'the history.policy comment rule (0.5.1)' "$LAY"
 present 'a hook that names none gets exactly the two' 'the ci_boundary hook flag forwarding (0.5.1)' "$LAY"
 present 'forwarding `--ledger`, `--interval`, `--max-wait`/`--no-wait` when the hook names them' 'the hook flag forwarding at the boundary (0.5.1)' "$OB"

@@ -74,6 +74,9 @@
 #   - readouts (BM-INDEX-03): the guard sentence — fail for a readout created after the guards marker,
 #     else warn; run ledgers (BM-HARNESS-01): a `Harness:` line — fail for one created after the
 #     guards marker, else warn
+#   - trace records (BM-TRACE-01): each line of runs/<ID>.trace.jsonl is a build-trace/1 object naming the
+#     file's ticket, an outcome, a dispatch tier, an ISO recorded_at and a usage object; warn (guards
+#     marker only): a Closed: run ledger created after the marker with no trace file
 #   - tests (BM-TEST-01; heuristic warning `living-pin?`): a tracked test file that names a living
 #     record file and one of its living keys
 #   - REQ coverage (when canonicalSpec + req_id_pattern resolve): every id a ticket cites
@@ -1112,6 +1115,47 @@ if [ -d "$BUILD/runs" ]; then
   done
   count run-harness "$nrun" "$nrun"
   [ "$nmiss" -gt 0 ] && warn harness "$nmiss run ledger(s) have no 'Harness:' header line (first: $firstm); new run ledgers must name harness/model/tier (BM-HARNESS-01)" "$BREL/runs"
+fi
+
+# ── 7f. Trace records (BM-TRACE-01): runs/<ID>.trace.jsonl holds one build-trace/1 object per line ──
+# Each non-blank line is a JSON object naming schema build-trace/1, this file's ticket id, an outcome, a
+# dispatch tier, an ISO recorded_at and a usage object (scripts/build-trace.py writes them). A run ledger
+# created after the guards marker and Closed: without a trace file warns (never fails: the record is new).
+if [ -d "$BUILD/runs" ]; then
+  ntl=0; ntf=0; nmiss=0; firstm=""
+  for tf in "$BUILD"/runs/*.trace.jsonl; do
+    [ -f "$tf" ] || continue
+    b="$(basename "$tf")"; tid="${b%.trace.jsonl}"; ntf=$((ntf + 1))
+    res="$(LC_ALL=C awk -v tid="$tid" '
+      function key(k, vre) { return $0 ~ ("\"" k "\"[[:space:]]*:[[:space:]]*" vre) }
+      /^[[:space:]]*$/ { next }
+      { n++
+        if (bad != "") next
+        why = ""
+        if ($0 !~ /^[[:space:]]*\{.*\}[[:space:]]*$/) why = "is not a JSON object"
+        else if (!key("schema", "\"build-trace/1\"")) why = "does not name schema build-trace/1"
+        else if (index($0, "\"ticket\":\"" tid "\"") == 0 && index($0, "\"ticket\": \"" tid "\"") == 0) why = "does not name ticket " tid
+        else if (!key("outcome", "\"(done|blocked|gate-pending|abandoned)\"")) why = "has no outcome done|blocked|gate-pending|abandoned"
+        else if (!key("dispatch", "\"(headless|subagent|manual|unknown)\"")) why = "has no dispatch headless|subagent|manual|unknown"
+        else if (!key("recorded_at", "\"[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9](:[0-9][0-9])?Z\"")) why = "has no ISO-8601 Z recorded_at"
+        else if (!key("usage", "[{]")) why = "has no usage object (\"not-measured\" is a valid source)"
+        if (why != "") bad = NR ": " why
+      }
+      END { printf "%d\t%s\n", n, bad }' "$tf")"
+    ntl=$((ntl + ${res%%	*})); why="${res#*	}"
+    [ -n "$why" ] && viol trace "runs/$b line $why (BM-TRACE-01)" "$BREL/runs/$b" "$tid"
+  done
+  [ "$ntf" -gt 0 ] && count trace "$ntl" "$ntl"
+  if [ "$GUARDS" -eq 1 ]; then
+    for r in "$BUILD"/runs/*.md; do
+      [ -f "$r" ] || continue
+      b="$(basename "$r" .md)"; [ -f "$BUILD/runs/$b.trace.jsonl" ] && continue
+      run_closed < "$r" || continue
+      created_after_marker "$BREL/runs/$b.md" || continue
+      nmiss=$((nmiss + 1)); [ -n "$firstm" ] || firstm="$b.md"
+    done
+    [ "$nmiss" -gt 0 ] && warn trace "$nmiss closed run ledger(s) created after the guards marker have no runs/<ID>.trace.jsonl (first: $firstm); the worker appends one at close (BM-TRACE-01, build-trace.py record)" "$BREL/runs"
+  fi
 fi
 
 # ── 8. REQ coverage (only when spec + pattern resolve) ───────────────────────
