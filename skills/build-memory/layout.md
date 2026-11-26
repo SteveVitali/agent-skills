@@ -74,10 +74,12 @@ on a hit; ledgers record `provided: yes/no` for credentials, never values (BM-LA
 
 ### Ids and filenames (BM-LAYOUT-02)
 
-- **Ticket ids** match `^(HUMAN-H|GATE-G)?[A-Z]+[0-9]*(\.[0-9]+[a-z]?)?$`. Canonically that is:
+- **Ticket ids** match `^(HUMAN-H|GATE-G)?[A-Z]+[0-9]*[A-Z]*(\.[0-9]+[a-z]?)?$`. Canonically that is:
   a marker id `HUMAN-H<k>` / `GATE-G<k>` (prefix + digits), **or** an ordinary id
-  `<LETTERS><digits?>` with an optional dotted sub-part and an optional trailing letter.
+  `<LETTERS><digits?>` with an optional second letter run, an optional dotted sub-part
+  and an optional trailing letter.
   Examples: `T1`, `T12a`, `P0.15b`, `PRB.04`, `CAP.1`, `REC.2`, `DOC.1`, `MAINT.1`,
+  `R6WATCH.2`, `R6FIX.51` (round-family ids — `<ROUND#><NAME>` + dotted ordinal),
   `HUMAN-H0`, `GATE-G1`. `GATE-ACCEPT` is the one named gate marker (the operator's
   accepted-deviations signature, BM-TAIL-01) and is also accepted.
 - **Filenames** match `^[0-9]{2,3}[a-z]?_<ID>__[a-z0-9-]+\.md$`. Lexical order is chain order;
@@ -271,7 +273,9 @@ Phase-4 adversarial review record); `## Plan extensions` (append-only: inserts, 
   without the ledger (BM-MANIFEST-02).
 - Inserting at run time is a scoped `decompose-spec mode=extend` (Phase 3 contract + Phase 4
   fresh-context review of the insert — never a contract drafted ad hoc at a boundary), with a
-  filename suffix letter (`16a_…`) and a `## Plan extensions` line; an id never re-binds to
+  filename suffix letter (`16a_…`) and a `## Plan extensions` line — a project may keep the
+  inserted rows themselves in a `## Plan extensions` table, and such `*.md` rows count as
+  chain rows for membership; an id never re-binds to
   another slug; splitting produces `<ID>a`, `<ID>b` files and marks the original
   `superseded-by-split` in its gate cell (the original file is kept). A row leaves the
   `nextTicket` order only by a token in its **gate cell** (the row's last cell):

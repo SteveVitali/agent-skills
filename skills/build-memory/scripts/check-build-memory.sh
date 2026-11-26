@@ -402,7 +402,7 @@ created_after_marker() {   # <path relative to REPO> → 0 when new under the gu
 
 # Ticket-id grammar (canonical interpretation of BM-LAYOUT-02; documented in layout.md).
 # GATE-ACCEPT is the one named gate marker (the operator's accepted-deviations signature, BM-TAIL-01).
-ID_RE='((HUMAN-H|GATE-G)[0-9]+|GATE-ACCEPT|[A-Z]+[0-9]*[a-z]?(\.[0-9]+[a-z]?)?)'
+ID_RE='((HUMAN-H|GATE-G)[0-9]+|GATE-ACCEPT|[A-Z]+[0-9]*[A-Z]*[a-z]?(\.[0-9]+[a-z]?)?)'
 FNAME_RE="^[0-9]{2,3}[a-z]?_${ID_RE}__[a-z0-9-]+\.md$"
 
 # ── LEDGER value reader (never-fail; strips inline comments) ──────────────────
@@ -443,10 +443,13 @@ if [ -f "$MANIFEST" ]; then
     | sed -E 's/[`[:space:]]//g' | grep -E '\.md$' >> "$COMPANIONS" || true
   # req_id_pattern: line.
   REQ_PATTERN="$(grep -m1 -iE '^[[:space:]]*req_id_pattern:' "$MANIFEST" 2>/dev/null | sed -E 's/^[^:]*:[[:space:]]*//; s/[`[:space:]]*$//; s/^`//')"
-  # Chain rows: table lines inside the "## The chain" section that name a *.md file; the nearest
-  # preceding `###` heading is the row's banner (V13).
+  # Chain rows: table lines inside the "## The chain" or "## Plan extensions" sections that name
+  # a *.md file; the nearest preceding `###` heading is the row's banner (V13). `## Plan
+  # extensions` is where run-time inserts land (layout.md: "a `## Plan extensions` line"); some
+  # projects keep the inserted rows themselves in a table there rather than only prose lines.
   LC_ALL=C awk '
     /^##[[:space:]]+The chain/ {inchain=1; banner=""; next}
+    /^##[[:space:]]+Plan extensions/ {inchain=1; banner=""; next}
     inchain && /^##[[:space:]]/ {inchain=0}
     inchain && /^###[[:space:]]/ {banner=$0; next}
     inchain && /^\|/ {
@@ -564,7 +567,9 @@ if [ -f "$DEF" ]; then
     # HYGIENE.1/REQ-MEM-3: the pre-fix priority scan read any "OPEN" word anywhere as owed even
     # when a dated DONE led the cell). Hyphens are kept so compound words like DONE-code or
     # ROOT-CAUSED never match a canonical token.
-    lastcell="$(printf '%s' "$row" | sed -E 's/[[:space:]]*\|[[:space:]]*$//' | awk -F'|' '{print $NF}' | tr 'a-z' 'A-Z')"
+    # \|-escaped pipes are cell content, not separators (BM-INDEX-01's ncells convention) —
+    # fold them to a sentinel before any field split so $NF is the true last cell.
+    lastcell="$(printf '%s' "$row" | awk '{gsub(/\\\|/,"\001"); print}' | sed -E 's/[[:space:]]*\|[[:space:]]*$//' | awk -F'|' '{print $NF}' | tr 'a-z' 'A-Z')"
     toks=" $(printf '%s' "$lastcell" | sed -E 's/[^A-Z-]+/ /g') "
     status="$(printf '%s' "$toks" | awk '{ for (i = 1; i <= NF; i++) if ($i == "OPEN" || $i == "PARTIAL" || $i == "DONE" || $i == "WONTFIX" || $i == "ACCEPTED-SKELETON") { print $i; exit } }')"
     printf '%s\n' "$id" >> "$DEF_IDS"
@@ -589,6 +594,7 @@ if [ -f "$DEF" ]; then
       for (i = 1; i <= NF; i++) { c = tolower(trim($i)); if (c == "kind") kc = i; if (c == "unblocked by") uc = i }
       next
     }
+    { gsub(/\\\|/, "") }
     /^\|[[:space:]]*D-/ && kc {
       k = $kc; gsub(/[[:space:]*`_]/, "", k); if (k != "P") next
       last = ""; for (i = NF; i >= 1; i--) if (trim($i) != "") { last = $i; break }
@@ -615,11 +621,12 @@ if [ -f "$DEF" ]; then
       fi
       if [ "$ro_passed" -eq 1 ]; then
         g="$(basename "$ro" .md)"   # e.g. GATE-G1
-        # GATE-ACCEPT is exempt: it is the accepted-deviations gate — a PASSED readout
-        # *means* the operator signed deviations that stay dispositioned-but-OPEN by
-        # design. Phase gates (GATE-G1, GATE-G2, …) keep the check: an OPEN row scoped
-        # to a passed phase is a real violation.
-        if [ "$g" != "GATE-ACCEPT" ]; then
+        # GATE-ACCEPT (and round instances GATE-ACCEPT.<round>) is exempt: it is the
+        # accepted-deviations gate — a PASSED readout *means* the operator signed
+        # deviations that stay dispositioned-but-OPEN by design. Phase gates
+        # (GATE-G1, GATE-G2, …) keep the check: an OPEN row scoped to a passed
+        # phase is a real violation.
+        if [ "$g" != "GATE-ACCEPT" ] && [ "${g#GATE-ACCEPT.}" = "$g" ]; then
           # Positional status only — a DONE-led row whose dated tail mentions "OPEN" or the
           # gate id is discharged history, not an open row scoped to the passed gate
           # (HYGIENE.1 alignment).
